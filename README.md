@@ -1,3 +1,5 @@
+#Enshrined are two sets of documents. Feed either set to an LLM to teach it HLX instantly
+
 # HLX
 
 **A deterministic protocol for LLM data interchange and execution.**
