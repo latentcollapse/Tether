@@ -1,0 +1,316 @@
+﻿{
+  "meta": {
+    "name": "HLX Runtime Conformance Spec",
+    "version": "0.1.0",
+    "status": "CANONICAL_ROOT",
+    "generated_at": "2025-12-25T12:00:00Z",
+    "encoding": "UTF-8",
+    "language_codex_ref": "hlx_codex_v0.1.0.json",
+    "integrity_check": "⟠ ◇ ⚳ ⚯ 🜊 🜁 🜂 🜃 🜄 🜇 ⟁ 🜋"
+  },
+  "1_scope_and_roles": {
+    "roles": {
+      "LLM": {
+        "analogy": "CPU / Orchestrator",
+        "responsibility": "Generating intent (HLX/HLXL), formulating logic, requesting operations.",
+        "restriction": "MUST NOT hallucinate handle contents. MUST NOT attempt to parse raw LC streams manually."
+      },
+      "Runtime": {
+        "analogy": "RAM / Disk / Physics Engine",
+        "responsibility": "Storing values (CAS), resolving handles, enforcing invariants, validating contracts.",
+        "authority": "Absolute source of truth for data integrity and state."
+      }
+    }
+  },
+  "2_core_data_model": {
+    "handles": {
+      "format_ascii": "&h_<tag>_<id>",
+      "format_runic": "⟁<tag><subscript_id>",
+      "subscript_rule": "ASCII digits 0-9 map to Unicode subscripts ₀-₉.",
+      "resolution": "Handles are opaque pointers to immutable content-addressed blobs."
+    },
+    "tables": {
+      "definition": "A Latent Table is a scoped namespace mapping Handles to canonical HLX-Lite Values."
+    }
+  },
+  "3_cas_requirements": {
+    "concept": "Content-Addressable Storage",
+    "rules": [
+      "R1: Determinism. collapse(V) always yields the same internal hash for identical V.",
+      "R2: Stability. Handles persist across session turns if the Table context is preserved.",
+      "R3: Canonicalization. Object keys MUST be sorted alphabetically/numerically before hashing.",
+      "R4: Numeric Normalization. 1.0 and 1 must hash identically if the type system allows (HLX-Lite distinguishes INT/FLOAT, so they differ)."
+    ]
+  },
+  "4_ls_operation_semantics": {
+    "description": "Formal definition of Latent Space (LS) operations (LS0-LS20).",
+    "ops": {
+      "LS0": {
+        "name": "Basic",
+        "ops": [
+          "COLLAPSE",
+          "RESOLVE",
+          "SNAPSHOT"
+        ]
+      },
+      "LS1": {
+        "name": "Binding",
+        "ops": [
+          "USING"
+        ],
+        "desc": "Sets active table context."
+      },
+      "LS2": {
+        "name": "Normalization",
+        "ops": [
+          "NORMALIZE"
+        ],
+        "desc": "Ensures handle format consistency."
+      },
+      "LS3": {
+        "name": "Roundtrip",
+        "invariant": "resolve(collapse(v)) == v"
+      },
+      "LS4": {
+        "name": "Pipeline",
+        "ops": [
+          "|>"
+        ],
+        "desc": "Surface syntax for chaining LS ops."
+      },
+      "LS5": {
+        "name": "Batch Collapse",
+        "desc": "Atomic collapse of array elements."
+      },
+      "LS6": {
+        "name": "Batch Resolve",
+        "desc": "Atomic resolution of array of handles."
+      },
+      "LS7": {
+        "name": "Isolation",
+        "desc": "Cross-table leakage prevention."
+      },
+      "LS8": {
+        "name": "Guard",
+        "ops": [
+          "GUARD"
+        ],
+        "desc": "Asserts condition on resolved value; halts on fail."
+      },
+      "LS9": {
+        "name": "Match",
+        "ops": [
+          "MATCH"
+        ],
+        "desc": "Structural pattern matching on resolved values."
+      },
+      "LS10": {
+        "name": "Transaction",
+        "ops": [
+          "BEGIN",
+          "COMMIT",
+          "ROLLBACK"
+        ],
+        "desc": "Atomic state updates."
+      },
+      "LS11": {
+        "name": "Validate",
+        "ops": [
+          "VALIDATE"
+        ],
+        "desc": "Checks if a handle exists in the table."
+      },
+      "LS12": {
+        "name": "Fingerprint",
+        "ops": [
+          "FINGERPRINT"
+        ],
+        "desc": "Returns raw content hash of a handle."
+      },
+      "LS13": {
+        "name": "Fork",
+        "ops": [
+          "FORK"
+        ],
+        "desc": "Creates a copy of a table."
+      },
+      "LS14": {
+        "name": "Merge",
+        "ops": [
+          "MERGE"
+        ],
+        "desc": "Merges diffs back into parent table."
+      },
+      "LS15": {
+        "name": "Diff",
+        "ops": [
+          "DIFF"
+        ],
+        "desc": "Returns delta between two tables."
+      },
+      "LS16": {
+        "name": "Lazy",
+        "ops": [
+          "LAZY",
+          "FORCE"
+        ],
+        "desc": "Deferred collapse execution."
+      },
+      "LS17": {
+        "name": "Alias",
+        "ops": [
+          "ALIAS",
+          "UNALIAS"
+        ],
+        "desc": "Human-readable tag management."
+      },
+      "LS18": {
+        "name": "Scoped",
+        "ops": [
+          "SCOPE",
+          "PROMOTE"
+        ],
+        "desc": "Ephemeral table lifecycles."
+      },
+      "LS19": {
+        "name": "Watchers",
+        "ops": [
+          "WATCH",
+          "ON_CHANGE"
+        ],
+        "desc": "Reactive triggers on handle mutation."
+      },
+      "LS20": {
+        "name": "Composition",
+        "ops": [
+          "COMPOSE",
+          "DECOMPOSE",
+          "PROJECT"
+        ],
+        "desc": "Structural handles referencing other handles."
+      }
+    }
+  },
+  "5_lc_semantics_and_codec": {
+    "definition": "LC (Latent Collapse) is a binary-safe stream format for HLX-Lite values. It encodes VALUES, not logic.",
+    "markers": {
+      "🜊": "OBJECT_START (Followed by Contract ID)",
+      "🜁": "FIELD_START (Followed by Index)",
+      "🜂": "OBJECT_END",
+      "🜃": "ARRAY_START (Followed by Count)",
+      "🜄": "ARRAY_END",
+      "🜇": "HANDLE_REF (Followed by ID)",
+      "⟁": "HANDLE_LITERAL",
+      "🜋": "STREAM_END"
+    },
+    "rules": [
+      "No whitespace allowed between markers.",
+      "Object fields must be emitted in sorted index order.",
+      "Contract IDs and Field Indices are integers.",
+      "Strings are JSON-quoted."
+    ]
+  },
+  "6_conformance_invariants": {
+    "must_pass": [
+      {
+        "id": "INV_FIDELITY",
+        "rule": "decode(encode(v)) == v"
+      },
+      {
+        "id": "INV_DETERMINISM",
+        "rule": "encode(v) is stable across calls and time."
+      },
+      {
+        "id": "INV_CANONICALITY",
+        "rule": "Semantically equal values produce bitwise identical LC."
+      },
+      {
+        "id": "INV_REVERSIBILITY",
+        "rule": "resolve(collapse(v)) == v"
+      },
+      {
+        "id": "INV_IDEMPOTENCE",
+        "rule": "encode(decode(lc)) == lc (for canonical streams)"
+      }
+    ]
+  },
+  "7_error_model": {
+    "codes": {
+      "E_HANDLE_NOT_FOUND": "Handle does not exist in the specified table.",
+      "E_LC_PARSE": "Stream contains invalid markers or structure.",
+      "E_CONTRACT_UNKNOWN": "Contract ID not recognized by Schema Registry.",
+      "E_FIELD_OUT_OF_RANGE": "Field index exceeds contract definition.",
+      "E_CANONICALIZATION_FAIL": "Input value cannot be canonicalized (e.g., circular ref).",
+      "E_TXN_ROLLBACK": "Transaction failed; state reverted.",
+      "E_VALIDATION_FAIL": "Guard or Schema validation failed."
+    }
+  },
+  "8_test_vectors": {
+    "description": "Mandatory test cases for Runtime conformance.",
+    "vectors": [
+      {
+        "name": "T0_Primitive_Int",
+        "input": 123,
+        "expected_lc": "🜊2🜁0123🜂"
+      },
+      {
+        "name": "T1_Primitive_String",
+        "input": "hello",
+        "expected_lc": "🜊4🜁0\"hello\"🜂"
+      },
+      {
+        "name": "T2_Simple_Object",
+        "input": {
+          "14": {
+            "@0": 1
+          }
+        },
+        "expected_lc": "🜊14🜁01🜂"
+      },
+      {
+        "name": "T3_Nested_Object",
+        "input": {
+          "14": {
+            "@0": {
+              "15": {
+                "@0": "inner"
+              }
+            }
+          }
+        },
+        "expected_lc": "🜊14🜁0🜊15🜁0\"inner\"🜂🜂"
+      },
+      {
+        "name": "T4_Array",
+        "input": [
+          1,
+          2
+        ],
+        "expected_lc": "🜊6🜁02🜁11🜁22🜂"
+      },
+      {
+        "name": "T5_Handle_Ref",
+        "input": {
+          "800": {
+            "@0": "h1"
+          }
+        },
+        "expected_lc": "🜊800🜁0\"h1\"🜂"
+      },
+      {
+        "name": "T6_Sparse_Fields",
+        "input": {
+          "14": {
+            "@0": 1,
+            "@5": 5
+          }
+        },
+        "expected_lc": "🜊14🜁01🜁55🜂"
+      }
+    ]
+  },
+  "9_llm_usage_directives": {
+    "instruction": "SYSTEM PROMPT INJECTION",
+    "text": "The HLX Runtime is the source of truth. Do not hallucinate handle contents. Treat LC streams as opaque binary blobs. Always use 'ls.resolve' or '⚯' to inspect data. If a handle is unknown, catch the E_HANDLE_NOT_FOUND error."
+  }
+}
