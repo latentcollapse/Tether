@@ -1,13 +1,13 @@
 {
   "meta": {
     "title": "HLX Unified Codex",
-    "version": "0.1.2",
-    "status": "ACTIVE_HOTFIX_SD8",
-    "generated_at": "2025-12-25T21:00:00Z",
+    "version": "0.1.0",
+    "status": "CANONICAL_ROOT",
+    "generated_at": "2025-12-25T12:00:00Z",
     "encoding": "UTF-8",
-    "hash_algo": "BLAKE3",
+    "hash_algo": "SHA-256",
     "integrity_check": "⟠ ◇ ⚳ ⚯ 🜊 🜂 🜁 🜇 🜋",
-    "active_transaction": "SD8_HOTFIX",
+    "active_transaction": "HLX_SPEC_SD7_CANONICAL",
     "purpose": "Didactic injection of the HLX Language Family into LLM context. This file is the single source of truth for bootstrapping HLX capability."
   },
   "1_axioms": {
@@ -148,7 +148,7 @@
         "⟳": "while",
         "⟲": "for"
       },
-      "latent_core": {
+      "ls_core": {
         "ꙮ": "latent",
         "⌸": "table",
         "▣": "using",
@@ -157,21 +157,400 @@
         "⚶": "ls.snapshot",
         "▷": "|>"
       },
-      "latent_advanced": {
-        "⚳⊕": "ls.compose",
-        "⚿": "ls.transaction",
+      "ls_sugar": {
+        "⚷": "latent (bind)",
+        "⚵": "latent value",
+        "⚻": "latent snapshot (bind)",
+        "⚑": "latent match",
         "⚐": "latent guard",
-        "⚑": "latent match"
+        "⚳⃰": "latent batch",
+        "⚯⃰": "latent resolve batch"
+      },
+      "ls_advanced": {
+        "⚳?": "ls.collapse_if",
+        "⚯‖": "ls.resolve_or",
+        "⚿": "ls.transaction",
+        "⚉": "ls.fingerprint",
+        "⚇": "ls.validate",
+        "⌸⑂": "ls.table_fork",
+        "⌸Δ": "ls.table_diff",
+        "⌸⊕": "ls.table_merge"
+      },
+      "ls_16_20": {
+        "⚳~": "ls.lazy",
+        "⚯!": "ls.force",
+        "⚳≡": "ls.alias",
+        "⚳≢": "ls.unalias",
+        "⌸{": "ls.scope_begin",
+        "⌸}": "ls.scope_end",
+        "⚳↑": "ls.promote",
+        "⚭": "ls.watch",
+        "⚮": "ls.unwatch",
+        "⚭→": "ls.on_change",
+        "⚳⊕": "ls.compose",
+        "⚯⊖": "ls.decompose",
+        "⚯π": "ls.project"
       }
     }
   },
-  "6_specdelta": {
-    "active": "SD8",
-    "changes": [
-      "Added LC BNF Grammar definition in contract 14",
-      "Enabled Federation protocols (801)",
-      "Hardened LSOp codes (820) for batch rollback",
-      "Joint Provenance (Claude+Grok)"
+  "6_transliteration": {
+    "description": "Explicit bijective mapping between Track A and Track B.",
+    "rule": "Tokenize input. Replace each token with its counterpart from the mapping table. Preserve non-keyword tokens (identifiers, literals).",
+    "mapping_table": [
+      {
+        "hlxl": "program",
+        "hlx": "⟠"
+      },
+      {
+        "hlxl": "block",
+        "hlx": "◇"
+      },
+      {
+        "hlxl": "let",
+        "hlx": "⊢"
+      },
+      {
+        "hlxl": "return",
+        "hlx": "↩"
+      },
+      {
+        "hlxl": "if",
+        "hlx": "❓"
+      },
+      {
+        "hlxl": "else",
+        "hlx": "❗"
+      },
+      {
+        "hlxl": "ls.collapse",
+        "hlx": "⚳"
+      },
+      {
+        "hlxl": "ls.resolve",
+        "hlx": "⚯"
+      },
+      {
+        "hlxl": "ls.snapshot",
+        "hlx": "⚶"
+      },
+      {
+        "hlxl": "|>",
+        "hlx": "▷"
+      }
+    ],
+    "handle_normalization": {
+      "rule": "HLX Handles use Unicode subscripts for IDs to increase token density.",
+      "ascii_form": "&h_<tag>_<id>",
+      "runic_form": "⟁<tag><subscript_id>",
+      "subscript_map": {
+        "0": "₀",
+        "1": "₁",
+        "2": "₂",
+        "3": "₃",
+        "4": "₄",
+        "5": "₅",
+        "6": "₆",
+        "7": "₇",
+        "8": "₈",
+        "9": "₉"
+      },
+      "example": {
+        "ascii": "&h_state_12",
+        "runic": "⟁state₁₂"
+      }
+    }
+  },
+  "7_latent_space": {
+    "description": "The runtime environment contracts. UPDATED via SD7 (table_scope_rules).",
+    "scope_rules": {
+      "default_table": "session",
+      "persistence_rule": "▣ <table_id> REQUIRED for cross-turn persistence",
+      "ephemeral_rule": "Without ▣, tables are turn-local and discarded",
+      "rationale": "Explicit scoping prevents accidental state leakage"
+    },
+    "contracts": {
+      "800:LatentHandle": {
+        "id": 800,
+        "fields": {
+          "0": {
+            "name": "id",
+            "type": "TEXT"
+          },
+          "1": {
+            "name": "tag",
+            "type": "TEXT"
+          },
+          "2": {
+            "name": "fingerprint",
+            "type": "BYTES"
+          }
+        }
+      },
+      "801:LatentTable": {
+        "id": 801,
+        "fields": {
+          "0": {
+            "name": "table_id",
+            "type": "TEXT"
+          },
+          "1": {
+            "name": "entries",
+            "type": "ARRAY"
+          }
+        }
+      },
+      "820:LSOp": {
+        "id": 820,
+        "fields": {
+          "0": {
+            "name": "op_code",
+            "type": "INT",
+            "notes": "0=RESOLVE, 1=COLLAPSE, 2=SNAPSHOT"
+          },
+          "1": {
+            "name": "table",
+            "type": "TEXT"
+          },
+          "2": {
+            "name": "handle",
+            "type": "TEXT"
+          },
+          "3": {
+            "name": "value",
+            "type": "ANY"
+          },
+          "4": {
+            "name": "tag",
+            "type": "TEXT"
+          }
+        }
+      }
+    }
+  },
+  "8_latent_collapse": {
+    "name": "LC (Latent Collapse)",
+    "description": "The universal wire format. A stream-based binary encoding.",
+    "markers": {
+      "🜊": "OBJECT_START (Followed by Contract ID)",
+      "🜁": "FIELD_START (Followed by Index)",
+      "🜂": "OBJECT_END",
+      "🜃": "ARRAY_START",
+      "🜄": "ARRAY_END",
+      "🜇": "HANDLE_REF",
+      "🜋": "STREAM_END"
+    },
+    "stream_logic": "LC is a depth-first, positional encoding of the HLX-Lite value tree.",
+    "wire_rules_patch_sd7": {
+      "markers_no_whitespace": true,
+      "rule": "LC streams MUST contain no whitespace between markers",
+      "docs_exception": "Spaces in documentation examples are for human readability only",
+      "example_correct": "🜊14🜁0123🜂",
+      "example_incorrect": "🜊14 🜁0 123 🜂"
+    }
+  },
+  "9_contracts": {
+    "description": "The Core Value Contracts (1-5) required for bootstrapping. UPDATED via SD7 (contract_registry).",
+    "definitions": {
+      "1:HLXLiteValue": {
+        "id": 1,
+        "fields": {
+          "0": {
+            "name": "kind",
+            "type": "ENUM"
+          },
+          "1": {
+            "name": "payload",
+            "type": "ANY"
+          }
+        }
+      },
+      "2:HLXLiteField": {
+        "id": 2,
+        "fields": {
+          "0": {
+            "name": "index",
+            "type": "INT"
+          },
+          "1": {
+            "name": "name",
+            "type": "TEXT"
+          },
+          "2": {
+            "name": "value",
+            "type": "HLXLiteValue"
+          }
+        }
+      },
+      "3:HLXLiteObject": {
+        "id": 3,
+        "fields": {
+          "0": {
+            "name": "contract_id",
+            "type": "INT"
+          },
+          "1": {
+            "name": "fields",
+            "type": "ARRAY[HLXLiteField]"
+          }
+        }
+      },
+      "4:HLXLiteDocument": {
+        "id": 4,
+        "fields": {
+          "0": {
+            "name": "root",
+            "type": "HLXLiteValue"
+          },
+          "1": {
+            "name": "provenance",
+            "type": "ProvenanceLite"
+          }
+        }
+      },
+      "5:ProvenanceLite": {
+        "id": 5,
+        "fields": {
+          "0": {
+            "name": "profile",
+            "type": "TEXT"
+          },
+          "1": {
+            "name": "timestamp",
+            "type": "TEXT"
+          },
+          "2": {
+            "name": "engine_id",
+            "type": "TEXT"
+          }
+        }
+      },
+      "14:UserValue": {
+        "id": 14,
+        "fields": {
+          "0": {
+            "name": "data",
+            "type": "ANY"
+          }
+        },
+        "description": "Example/Test contract from SD7 Registry"
+      }
+    }
+  },
+  "10_examples": {
+    "description": "Rosetta Stone examples showing the same logic across all layers.",
+    "T0_Minimal": {
+      "scenario": "A function returning a number.",
+      "layer_1_hlxl": "program t0 { block main() { return 7; } }",
+      "layer_2_hlx": "⟠ t0 { ◇ main() { ↩ 7; } }",
+      "layer_3_core_ast": "{ \"kind\": \"PROGRAM\", \"id\": \"t0\", \"body\": [...] }"
+    },
+    "T1_Pipeline": {
+      "scenario": "Piping a value through a function.",
+      "layer_1_hlxl": "let y = 3 |> double;",
+      "layer_2_hlx": "⊢ y = 3 ▷ double;",
+      "layer_3_core_ast": "{ \"kind\": \"PIPELINE\", \"left\": 3, \"right\": \"double\" }"
+    },
+    "T2_LS_Roundtrip": {
+      "scenario": "Collapse and Resolve a value.",
+      "layer_1_hlxl": "let h = ls.collapse {14:{@0:123}}; let v = ls.resolve h;",
+      "layer_2_hlx": "⊢ h = ⚳ {14:{@0:123}}; ⊢ v = ⚯ h;",
+      "layer_4_lc": "🜊820🜁01🜁3🜊14🜁0123🜂🜂"
+    }
+  },
+  "11_directives": {
+    "instruction": "System Instructions for HLX Mode.",
+    "rules": [
+      "1. INPUT: Accept either HLXL (ASCII) or HLX (Runic). Auto-detect based on glyph presence.",
+      "2. PARSING: Validate against the grammars in Sections 4 & 5.",
+      "3. LOWERING: Transliterate HLX to HLXL internally if needed for processing.",
+      "4. EXECUTION: Prioritize HLX-Lite Contract IDs (e.g., 14, 800) over arbitrary JSON shapes.",
+      "5. OUTPUT: When asked to output code, prefer the requested track (Lite or Runic).",
+      "6. LC: Treat the characters 🜊, 🜂, 🜁 as semantic stream markers, not decoration."
     ]
+  },
+  "12_spec_delta": {
+    "description": "Evolution history of the HLX Specification.",
+    "policy": "Modifications to Frozen components must happen via SpecDelta Ops.",
+    "history": [
+      {
+        "id": "SD0",
+        "name": "GENESIS",
+        "desc": "Initial Bootstrapping."
+      },
+      {
+        "id": "SD1",
+        "name": "RUNIC_GLYPHS",
+        "desc": "Introduction of Unicode surface."
+      },
+      {
+        "id": "SD2",
+        "name": "LS_EXPANSION",
+        "desc": "Added operations LS5-LS10."
+      },
+      {
+        "id": "SD3",
+        "name": "HANDLE_SUBSCRIPTS",
+        "desc": "Migration to subscript IDs."
+      },
+      {
+        "id": "SD4",
+        "name": "LC_STREAM_TUNING",
+        "desc": "Marker optimization."
+      },
+      {
+        "id": "SD5",
+        "name": "ADVANCED_OPS",
+        "desc": "Added operations LS16-LS20."
+      },
+      {
+        "id": "SD6",
+        "name": "FREEZE_V1",
+        "desc": "Locking of v1.0.0 components."
+      },
+      {
+        "id": "SD7",
+        "name": "CANONICAL_HOTFIX",
+        "author": "grok",
+        "witness": "hlx_cluster",
+        "timestamp": "2025-12-12T18:00:00Z",
+        "changes": [
+          "LC whitespace banned on wire format",
+          "Contract ID registry canonicalized",
+          "Table context (▣) mandatory for persistence",
+          "Documentation examples annotated as human-readable"
+        ],
+        "status": "FROZEN",
+        "handle": "⟁HLX_SPEC_SD7_CANONICAL"
+      }
+    ]
+  },
+  "13_hotfix_state": {
+    "description": "Resolved state of the SD7 Bundle transaction.",
+    "bundle_content": {
+      "registry": {
+        "1": "HLXLiteValue",
+        "2": "HLXLiteField",
+        "3": "HLXLiteObject",
+        "4": "HLXLiteDocument",
+        "5": "ProvenanceLite",
+        "14": "UserValue",
+        "800": "LatentHandle",
+        "801": "LatentTable",
+        "820": "LSOp"
+      },
+      "lc_rules_patch": {
+        "markers_no_whitespace": true,
+        "rule": "LC streams MUST contain no whitespace between markers"
+      },
+      "table_scoping": {
+        "persistence_rule": "▣ <table_id> REQUIRED for cross-turn persistence",
+        "ephemeral_rule": "Without ▣, tables are turn-local and discarded"
+      },
+      "sd7_meta": {
+        "id": "SD7",
+        "name": "CANONICAL_HOTFIX",
+        "status": "FROZEN"
+      }
+    }
   }
 }
