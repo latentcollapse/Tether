@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "architecture_class": "TRANSPORT",
+  "policy": {
+    "unknown_contracts": "ALLOWED",
+    "validation_level": "STRUCTURAL_ONLY",
+    "semantic_interpretation": "EXTERNAL",
+    "execution": "OUT_OF_SCOPE"
+  },
+  "primitive_contracts": {
+    "1": {
+      "name": "NULL",
+      "kind": "PRIMITIVE"
+    },
+    "2": {
+      "name": "BOOL",
+      "kind": "PRIMITIVE"
+    },
+    "3": {
+      "name": "INT",
+      "kind": "PRIMITIVE"
+    },
+    "4": {
+      "name": "FLOAT",
+      "kind": "PRIMITIVE"
+    },
+    "5": {
+      "name": "TEXT",
+      "kind": "PRIMITIVE"
+    },
+    "6": {
+      "name": "BYTES",
+      "kind": "PRIMITIVE"
+    },
+    "7": {
+      "name": "ARR_OBJ_FRAMING",
+      "kind": "MECHANICAL"
+    }
+  },
+  "known_contracts": {}
+}

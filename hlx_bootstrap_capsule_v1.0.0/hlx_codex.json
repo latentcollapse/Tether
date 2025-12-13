@@ -1,0 +1,173 @@
+{
+  "meta": {
+    "title": "HLX Unified Codex",
+    "version": "1.0.0",
+    "status": "CANONICAL_ROOT",
+    "generated_at": "2025-12-13T18:00:00Z",
+    "encoding": "UTF-8",
+    "hash_algo": "BLAKE3",
+    "integrity_check": "⟠ ◇ ⚳ ⚯ 🜊 🜁 🜂 🜃 🜄 🜇 ⟁ 🜋",
+    "architecture_class": "TRANSPORT",
+    "architecture_statement": "HLX specifies canonical encoding, ordering, and transfer of values. It does not define semantic meaning or execution behavior.",
+    "purpose": "Didactic injection of the HLX Language Family into LLM context. This file is the single source of truth for bootstrapping HLX capability."
+  },
+  "1_axioms": {
+    "description": "The inviolable truths governing the Helix architecture.",
+    "axioms": [
+      {
+        "id": "A1",
+        "name": "DETERMINISM",
+        "rule": "The same input code must ALWAYS produce the same Latent Collapse (LC) stream."
+      },
+      {
+        "id": "A2",
+        "name": "REVERSIBILITY",
+        "rule": "Any value compressed into a Handle (⚳) can be resolved (⚯) back to its exact original state."
+      },
+      {
+        "id": "A3",
+        "name": "BIJECTION",
+        "rule": "Track A (Lite/ASCII) and Track B (Runic/Glyph) are mathematically isomorphic. They map 1:1."
+      },
+      {
+        "id": "A4",
+        "name": "UNIVERSAL_VALUE",
+        "rule": "All tracks lower to the HLX-Lite Value System (Contracts 1-5) before encoding."
+      }
+    ]
+  },
+  "contract_registry_ref": {
+    "file": "hlx_contracts.json",
+    "policy": {
+      "unknown_contracts": "ALLOWED",
+      "validation_level": "STRUCTURAL_ONLY",
+      "semantic_interpretation": "EXTERNAL",
+      "execution": "OUT_OF_SCOPE"
+    },
+    "note": "Contract IDs may be unknown. Unknown ≠ invalid. Validation is structural only."
+  },
+  "2_architecture": {
+    "description": "The Dual-Track Architecture. Two surface languages, one runtime.",
+    "tracks": {
+      "track_a_lite": {
+        "name": "HLX-Lite (Engineering)",
+        "audience": "Humans, IDEs, Git, CI/CD",
+        "format": "ASCII Text",
+        "pipeline": "HLXL (Source) -> HLXL-LS (Latent Ops) -> HLX-Lite Value -> LC Stream"
+      },
+      "track_b_runic": {
+        "name": "HLX-Runic (Native)",
+        "audience": "LLMs, Context Windows, Vector Stores",
+        "format": "Unicode Glyphs",
+        "pipeline": "HLX (Source) -> HLX-LS (Latent Ops) -> HLX-Lite Value -> LC Stream"
+      }
+    },
+    "convergence": {
+      "point": "HLX-Lite Value System",
+      "wire": "LC (Latent Collapse) Stream"
+    }
+  },
+  "3_foundation_values": {
+    "description": "The atomic type system underlying all HLX languages. It defines HOW data is structured.",
+    "primitive_types": {
+      "NULL": {
+        "id": 0,
+        "lc_marker": "Implied by Contract"
+      },
+      "BOOL": {
+        "id": 1,
+        "values": [
+          "true",
+          "false"
+        ]
+      },
+      "INT": {
+        "id": 2,
+        "format": "Signed 64-bit LEB128"
+      },
+      "FLOAT": {
+        "id": 3,
+        "format": "IEEE 754 Double"
+      },
+      "TEXT": {
+        "id": 4,
+        "format": "UTF-8 String"
+      },
+      "BYTES": {
+        "id": 5,
+        "format": "Raw Byte Sequence"
+      },
+      "ARRAY": {
+        "id": 6,
+        "format": "Ordered List"
+      },
+      "OBJECT": {
+        "id": 7,
+        "format": "Typed Map (ContractID + Sorted Fields)"
+      }
+    },
+    "field_notation": {
+      "syntax": "@N",
+      "description": "@N denotes zero-based field index N within a contract object.",
+      "rule": "Fields MUST be encoded in ascending index order in LC-B. Violations raise E_FIELD_ORDER."
+    }
+  },
+  "4_transliteration": {
+    "description": "Mandatory ASCII transliteration table for all canonical glyphs.",
+    "table": {
+      "⟠": "program",
+      "◇": "block",
+      "⊢": "let",
+      "⊡": "local",
+      "↩": "return",
+      "❓": "if",
+      "❗": "else",
+      "⟳": "while",
+      "⟲": "for",
+      "⚳": "ls.collapse",
+      "⚯": "ls.resolve",
+      "⚶": "ls.snapshot",
+      "⚿": "ls.transaction",
+      "▷": "|>",
+      "⟁": "&h_"
+    }
+  },
+  "5_latent_collapse": {
+    "name": "LC (Latent Collapse)",
+    "description": "The universal wire format. Defined in two modes as per SD9.",
+    "dual_mode": true,
+    "lc_t_text": {
+      "status": "PEDAGOGICAL",
+      "description": "Human-readable projection for LLMs and debugging.",
+      "markers": {
+        "🜊": "OBJECT_START",
+        "🜁": "FIELD_START",
+        "🜂": "OBJECT_END",
+        "🜃": "ARRAY_START",
+        "🜄": "ARRAY_END",
+        "🜇": "HANDLE_REF",
+        "🜋": "STREAM_END"
+      }
+    },
+    "lc_b_binary": {
+      "status": "CANONICAL",
+      "description": "Authoritative binary form for hashing and storage (v2).",
+      "tags": {
+        "0x01": "INT (Signed LEB128)",
+        "0x02": "FLOAT (IEEE754 Big-Endian)",
+        "0x03": "TEXT (LEB128 Len + UTF-8)",
+        "0x04": "BYTES (LEB128 Len + Raw)",
+        "0x05": "ARR_START",
+        "0x06": "ARR_END",
+        "0x07": "OBJ_START (LEB128 ContractID)",
+        "0x08": "OBJ_END",
+        "0x09": "HANDLE_REF (LEB128 Len + ASCII)"
+      },
+      "object_rule": "Fields encoded as <field_idx_leb128><VALUE>. Must be sorted by index."
+    },
+    "lc_12_envelope_spec": {
+      "merkle_spec": "MERKLE SPEC (FANOUT 16, CANONICAL): Let chunks be ordered by index i = 0..N-1. Leaf hash: H_leaf[i] = BLAKE3(chunk_bytes[i]). Group leaves in order into nodes of up to 16 children. INTERNAL NODE (CANONICAL): - Let child_count be the number of children in this node, where 1 ≤ child_count ≤ 16. - Let child_hashes be the ordered list of child hashes for this node. - Compute the internal node hash as: H_node = BLAKE3( byte(child_count) || concat(child_hash_0 || child_hash_1 || ... || child_hash_(child_count-1)) ) - If child_count < 16, PAD with 32-byte zero hashes before hashing. - child_hash_i MUST be the 32-byte BLAKE3 digest of the corresponding child. - Children MUST be concatenated in strictly increasing child index order. - Root hash = top node hash. VERIFICATION RULE: - A receiver MUST recompute leaf hashes, rebuild the tree using this exact rule, and compare the resulting payload_root to the manifest. - Any mismatch is fatal (E_ENV_PAYLOAD_HASH_MISMATCH).",
+      "table_order_key": "TABLE ORDER KEY (CANONICAL): Normalize handle string with Unicode NFC. Lowercase using Unicode simple case-folding. Strip exactly one leading literal \"&h_\" prefix if present; strip nothing else. order_key = UTF-8 bytes of resulting string. Sort ascending lexicographic by order_key bytes. - Case folding MUST use Unicode 15.0 simple case folding as defined in Unicode Character Database file CaseFolding.txt. Non-ASCII handles raise E_HANDLE_INVALID."
+    }
+  }
+}
