@@ -1,0 +1,70 @@
+(* HLX Grammar — EBNF *)
+(* Defines surface syntax for HLX (Runic) and HLXL (ASCII) *)
+
+program      = '⟠' , identifier , '{' , { block } , '}' ;
+
+block        = '◇' , identifier , '(' , [ param_list ] , ')' , '{' , { statement } , '}' ;
+
+param_list   = identifier , { ',' , identifier } ;
+
+statement    = let_stmt
+             | local_stmt
+             | return_stmt
+             | if_stmt
+             | while_stmt
+             | for_stmt
+             | expr_stmt ;
+
+let_stmt     = '⊢' , identifier , '=' , expr , ';' ;
+local_stmt   = '⊡' , identifier , '=' , expr , ';' ;
+return_stmt  = '↩' , expr , ';' ;
+
+if_stmt      = '❓' , '(' , expr , ')' , '{' , { statement } , '}'
+             , [ '❗' , '{' , { statement } , '}' ] ;
+
+while_stmt   = '⟳' , '(' , expr , ')' , '{' , { statement } , '}' ;
+
+for_stmt     = '⟲' , '(' , identifier , 'in' , expr , ')' , '{' , { statement } , '}' ;
+
+expr_stmt    = expr , ';' ;
+
+expr         = pipe_expr ;
+
+pipe_expr    = primary , { '▷' , primary } ;
+
+primary      = ls_op
+             | handle_ref
+             | value
+             | identifier
+             | '(' , expr , ')' ;
+
+ls_op        = ls_operator , identifier , { identifier } , [ expr ] ;
+
+ls_operator  = '⚳' | '⚯' | '⚶' | '⚿' ;
+
+handle_ref   = '⟁' , identifier , [ subscript ] ;
+
+subscript    = subscript_digit , { subscript_digit } ;
+subscript_digit = '₀' | '₁' | '₂' | '₃' | '₄' | '₅' | '₆' | '₇' | '₈' | '₉' ;
+
+value        = object | array | string | number | boolean | null ;
+
+object       = '{' , contract_id , ':' , '{' , [ field_list ] , '}' , '}' ;
+contract_id  = integer ;
+field_list   = field_entry , { ',' , field_entry } ;
+field_entry  = '@' , integer , ':' , value ;
+
+array        = '🜃' , { value } , '🜄'
+             | '[' , [ value , { ',' , value } ] , ']' ;
+
+string       = '"' , { character } , '"' ;
+number       = integer | float ;
+integer      = [ '-' ] , digit , { digit } ;
+float        = integer , '.' , digit , { digit } ;
+boolean      = 'true' | 'false' ;
+null         = 'null' ;
+
+identifier   = letter , { letter | digit | '_' } ;
+letter       = 'a'..'z' | 'A'..'Z' ;
+digit        = '0'..'9' ;
+character    = (* any UTF-8 character except unescaped '"' *) ;
