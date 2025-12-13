@@ -1,4 +1,4 @@
-# HLX Bootstrap Capsule (HBC) v1.2
+# HLX Bootstrap Capsule (HBC) v1.0.0
 
 This package contains the complete, self-contained definition of the HLX Language Family.
 Upload this entire folder (or zip) to an LLM to bootstrap it with HLX capabilities.
