@@ -1,0 +1,428 @@
+# HLX v1.3 Implementation Brief
+
+**From:** Claude + ChatGPT (consensus draft)  
+**To:** Gemini (implementation)  
+**Date:** 2025-12-13  
+**Scope:** v1.2 → v1.3 patch  
+**Constraint:** Transport upgrades only. No runtime semantics.
+
+---
+
+## STRATEGIC CONTEXT
+
+v1.3 is not a repair. It is a density upgrade.
+
+v1.2 is correct and complete for literacy.  
+v1.3 makes it *provable* and *transferable*.
+
+The meta-goal: deliver the v1.3 patch **as an HLX-LS artifact** that a receiving LLM can parse, lower, and apply. This dogfoods the spec while upgrading it.
+
+---
+
+## TRACK OVERVIEW
+
+| Track | Name | Purpose |
+|-------|------|---------|
+| A | Tooling | Deterministic build + verification |
+| B | Conformance | Fork-killer vectors + LC_12 fixtures |
+| C | Patch Schema | HLX-native patch delivery format |
+| D | Self-Test | Adoption accelerator |
+
+---
+
+## TRACK A — DETERMINISTIC TOOLING
+
+### A1: `hlx_exporter` (Python)
+
+**Location:** `tools/hlx_exporter.py`
+
+**Behavior:**
+- Accept capsule directory as input
+- Produce deterministic ZIP (stable sort, zeroed timestamps, fixed permissions)
+- Compute `CAPSULE_INTEGRITY_HASH_SHA256` over final ZIP bytes
+- Compute `codex_hash` (SHA256 of `hlx_codex.json`)
+- Compute `conformance_hash` (SHA256 of `hlx_runtime_conformance.json`)
+- If BLAKE3 available, compute `payload_root` for LC_12 envelopes
+- Write hashes to manifest or stdout
+
+**CLI:**
+````
+python -m hlx_exporter build --in ./capsule --out hlx_capsule_v1.3.zip
+python -m hlx_exporter hash --file hlx_capsule_v1.3.zip
+````
+
+**Constraints:**
+- No external dependencies beyond stdlib + optional `blake3`
+- Must be reproducible across platforms (Linux/macOS/Windows)
+- LLMs MUST NOT compute hashes; this tool is the source of truth
+
+---
+
+### A2: `hlx_verifier` (Python)
+
+**Location:** `tools/hlx_verifier.py`
+
+**Behavior:**
+- Validate JSON schema of `hlx_codex.json` and `hlx_runtime_conformance.json`
+- Run all LC-B decode tests from `5_test_vectors`
+- Run all negative vectors, confirm expected errors
+- Verify LC_12 Merkle root against fixtures
+- Emit `PASS` / `FAIL` per vector
+- Exit 0 if all pass, exit 1 otherwise
+
+**CLI:**
+````
+python -m hlx_verifier run --capsule ./capsule
+python -m hlx_verifier lc12 --manifest ./fixtures/lc12/valid_envelope.json --payload ./fixtures/lc12/payload.lc
+````
+
+---
+
+## TRACK B — CONFORMANCE EXPANSION
+
+### B1: Add Missing Vectors
+
+Add to `hlx_runtime_conformance.json` → `5_test_vectors.vectors`:
+````json
+{
+  "name": "T6_Nested_Array",
+  "input": [[1], [2, 3]],
+  "lc_binary_hex": "05 05 01 01 06 05 01 02 01 03 06 06"
+},
+{
+  "name": "T8_Multi_Field_Object",
+  "input": {"20": {"@0": 1, "@1": "two", "@2": true}},
+  "lc_binary_hex": "07 14 00 01 01 01 03 03 74 77 6F 02 01 08",
+  "note": "Fields sorted by index. BOOL true = 0x01 after tag 0x02? — VERIFY ENCODING"
+},
+{
+  "name": "T9_Float_Value",
+  "input": 3.14159,
+  "lc_binary_hex": "02 40 09 21 F9 F0 1B 86 6E",
+  "note": "IEEE 754 double, big-endian"
+},
+{
+  "name": "T10_Empty_Object",
+  "input": {"1": {}},
+  "lc_binary_hex": "07 01 08"
+}
+````
+
+### B2: Add Fork-Killer Negative Vectors
+
+Add to `5_test_vectors.negative_vectors`:
+````json
+{
+  "name": "N6_Overlong_LEB128",
+  "input_lc_binary_hex": "07 FF FF FF FF FF FF FF FF FF 7F 08",
+  "expected_error": "E_LC_BINARY_DECODE",
+  "note": "Overlong LEB128 contract ID"
+},
+{
+  "name": "N7_Unknown_Tag",
+  "input_lc_binary_hex": "0A 01 01",
+  "expected_error": "E_LC_BINARY_DECODE",
+  "note": "Tag 0x0A is undefined"
+},
+{
+  "name": "N8_Trailing_Bytes",
+  "input_lc_binary_hex": "01 7B FF FF",
+  "expected_error": "E_LC_BINARY_DECODE",
+  "note": "Valid INT followed by garbage"
+},
+{
+  "name": "N9_LEB128_Length_Mismatch",
+  "input_lc_binary_hex": "03 05 68 65 6C",
+  "expected_error": "E_LC_BINARY_DECODE",
+  "note": "TEXT claims 5 bytes, only 3 provided"
+}
+````
+
+### B3: Add LC_12 Fixtures
+
+**Location:** `fixtures/lc12/`
+
+**Files:**
+- `valid_envelope.json` — manifest with known `payload_root`
+- `valid_payload.lc` — LC-B bytes matching manifest
+- `tampered_payload.lc` — one byte flipped
+- `expected_results.json` — verification expectations
+
+**Manifest Example:**
+````json
+{
+  "envelope_version": "0.2",
+  "payload_kind": "VALUE",
+  "lc_mode": "LC-B",
+  "codec_version": "SD9_LC_B_v2",
+  "total_payload_bytes": 7,
+  "chunking": {
+    "chunk_count": 1,
+    "default_chunk_size_bytes": 524288,
+    "final_chunk_size_bytes": 7
+  },
+  "hash": {
+    "algo": "BLAKE3",
+    "payload_root": "COMPUTE_WITH_EXPORTER",
+    "merkle": {"enabled": true, "fanout": 16}
+  },
+  "chunks": [{"index": 0, "hash": "COMPUTE_WITH_EXPORTER"}]
+}
+````
+
+---
+
+## TRACK C — HLX-LS PATCH SCHEMA
+
+### C1: Define Patch Contracts
+
+**Contract 200:** `PatchManifest`
+````
+@0: TEXT     — patch_name
+@1: TEXT     — timestamp (ISO 8601)
+@2: TEXT     — version_transition ("v1.2 → v1.3")
+@3: HANDLE   — source_capsule_ref (optional)
+@4: ARRAY    — operations (array of Contract 201)
+````
+
+**Contract 201:** `PatchOperation`
+````
+@0: TEXT     — op_type ("ADD" | "MODIFY" | "DELETE")
+@1: TEXT     — target_path (relative to capsule root)
+@2: HANDLE   — content_ref (collapsed LC stream of file contents)
+@3: TEXT     — expected_hash (SHA256 of result, optional)
+````
+
+### C2: Produce HLX-LS Patch Program
+
+**File:** `patches/v1.3/hlx_v13_patch.hlx`
+````hlx
+⟠ hlx_v13_patch {
+  ◇ manifest() {
+    ⊢ meta = {200:{
+      @0: "HLX v1.3 Conformance + Tooling Patch",
+      @1: "2025-12-13T12:00:00Z",
+      @2: "v1.2 → v1.3",
+      @3: ⟁hlx_v12_capsule₀
+    }};
+    
+    ⊢ ops = 🜃
+      {201:{@0: "ADD", @1: "tools/hlx_exporter.py", @2: ⟁exporter_py₀}}
+      {201:{@0: "ADD", @1: "tools/hlx_verifier.py", @2: ⟁verifier_py₀}}
+      {201:{@0: "MODIFY", @1: "hlx_runtime_conformance.json", @2: ⟁conformance_v13₀}}
+      {201:{@0: "ADD", @1: "fixtures/lc12/valid_envelope.json", @2: ⟁fixture_valid₀}}
+      {201:{@0: "ADD", @1: "fixtures/lc12/valid_payload.lc", @2: ⟁payload_valid₀}}
+      {201:{@0: "ADD", @1: "fixtures/lc12/tampered_payload.lc", @2: ⟁payload_tampered₀}}
+      {201:{@0: "ADD", @1: "README_v1.3.md", @2: ⟁readme_delta₀}}
+    🜄;
+    
+    ↩ ⚳ patch_table v13 {200:{@0: meta, @1: ops}};
+  }
+}
+````
+
+**File:** `patches/v1.3/hlx_v13_patch.hlxl` (bijective ASCII)
+
+### C3: Wrap in LC_12 Envelope
+
+The patch program + all referenced handles are collapsed to LC-B, chunked, Merkle-hashed, and wrapped in an LC_12 envelope.
+
+**Deliverable:**
+````
+patches/v1.3/
+├── hlx_v13_patch.hlx
+├── hlx_v13_patch.hlxl
+├── patch_payload.lc
+├── manifest.json
+└── handles/
+    ├── exporter_py.lc
+    ├── verifier_py.lc
+    ├── conformance_v13.lc
+    └── ...
+````
+
+---
+
+## TRACK D — SELF-TEST
+
+### D1: Add Literacy Self-Test to README
+
+**Section:** `## HLX Literacy Self-Test`
+````markdown
+To verify HLX literacy, a model should be able to:
+
+1. **Transliterate:** Convert the following HLX to HLXL:
+```hlx
+   ⟠ test { ◇ main() { ⊢ x = {14:{@0:42}}; ↩ x; } }
+```
+
+2. **Lower:** Produce HLX-Lite value for `{14:{@0:42}}`
+
+3. **Encode LC-B:** Emit hex bytes for integer `123`
+   Expected: `01 7B`
+
+4. **Validate:** Identify the error in `🜊 14 🜂`
+   Expected: `E_LC_PARSE` (illegal whitespace)
+
+5. **Construct LC_12 Manifest:** Given a 7-byte payload, produce manifest skeleton.
+
+A model that completes all 5 tasks is HLX-literate.
+````
+
+---
+
+## IMPLEMENTATION SEQUENCE
+````
+PHASE 1: Conformance (Track B)
+├── Add vectors T6/T8/T9/T10
+├── Add negative vectors N6/N7/N8/N9
+├── Create LC_12 fixtures
+└── Verify: all vectors documented
+
+PHASE 2: Tooling (Track A)
+├── Implement hlx_exporter
+├── Implement hlx_verifier
+├── Run verifier against expanded conformance
+└── Verify: PASS on all vectors
+
+PHASE 3: Patch Schema (Track C)
+├── Define Contracts 200/201 in codex
+├── Write hlx_v13_patch.hlx + .hlxl
+├── Collapse to LC-B
+├── Wrap in LC_12 envelope
+└── Verify: envelope validates with hlx_verifier
+
+PHASE 4: Self-Test (Track D)
+├── Add self-test section to README
+├── Bump capsule version to v1.3
+├── Recompute all hashes with hlx_exporter
+└── Ship
+````
+
+---
+
+## NON-GOALS (HARD BOUNDARY)
+
+- ❌ Runtime VM or state machine
+- ❌ Semantic contract definitions (e.g., "Contract 14 = ASTNode")
+- ❌ Execution semantics for `ls.*` operators
+- ❌ LLM-computed hashes
+- ❌ Any change to the literacy/execution boundary
+
+v1.3 is **stronger transport**, not **bigger language**.
+
+---
+
+## ACCEPTANCE CRITERIA
+
+v1.3 ships when:
+
+1. `hlx_verifier run` returns `PASS` on all vectors (old + new)
+2. `hlx_verifier lc12` validates `valid_envelope.json` and rejects `tampered_payload.lc`
+3. `hlx_exporter build` produces byte-identical ZIP on repeat runs
+4. `hlx_v13_patch.hlx` parses, lowers, and encodes without error
+5. LC_12 envelope containing patch verifies with `hlx_verifier`
+6. A cold model can complete the self-test
+
+---
+
+## INSTRUCTION BLOCKS FOR GEMINI
+
+### Phase 1: Conformance
+````
+ENGINEER TO MODEL: IMPLEMENTATION MODE ACTIVATE
+SCOPE: TRACK B — CONFORMANCE EXPANSION
+PROHIBITION: NO RUNTIME SEMANTICS, NO TOOLING YET
+
+Add to hlx_runtime_conformance.json:
+- Vectors: T6, T8, T9, T10
+- Negative vectors: N6, N7, N8, N9
+- Update vector count in description
+
+Create fixtures/lc12/:
+- valid_envelope.json (manifest, payload_root = COMPUTE_WITH_EXPORTER)
+- valid_payload.lc (placeholder bytes, to be finalized)
+- tampered_payload.lc (valid_payload with one byte flipped)
+- expected_results.json
+
+Output: file diffs only.
+````
+
+### Phase 2: Tooling
+````
+ENGINEER TO MODEL: IMPLEMENTATION MODE ACTIVATE
+SCOPE: TRACK A — DETERMINISTIC TOOLING
+PROHIBITION: DO NOT MODIFY SPEC FILES
+
+Create tools/hlx_exporter.py:
+- Deterministic ZIP (sorted, zeroed timestamps)
+- SHA256 capsule hash
+- SHA256 per-file hashes
+- Optional BLAKE3 if available
+
+Create tools/hlx_verifier.py:
+- Load capsule
+- Run all LC-B vectors
+- Run all negative vectors
+- Verify LC_12 fixtures
+- Exit 0/1
+
+Output: complete Python files.
+````
+
+### Phase 3: Patch Schema
+````
+ENGINEER TO MODEL: IMPLEMENTATION MODE ACTIVATE
+SCOPE: TRACK C — HLX-LS PATCH SCHEMA
+PROHIBITION: NO RUNTIME SEMANTICS
+
+Add to hlx_codex.json:
+- Contract 200 (PatchManifest)
+- Contract 201 (PatchOperation)
+
+Create patches/v1.3/:
+- hlx_v13_patch.hlx (runic)
+- hlx_v13_patch.hlxl (ASCII bijection)
+
+Output: file diffs + new files.
+````
+
+### Phase 4: Finalize
+````
+ENGINEER TO MODEL: IMPLEMENTATION MODE ACTIVATE
+SCOPE: TRACK D + FINALIZATION
+PROHIBITION: NO SCOPE CREEP
+
+Add to README.md:
+- HLX Literacy Self-Test section
+
+Bump version:
+- Capsule version → v1.3
+- Update all version references
+
+Recompute hashes:
+- Use hlx_exporter to compute final hashes
+- Insert into manifest and conformance files
+
+Output: final capsule file tree.
+````
+
+---
+
+## DELIVERY TO HARBOR INN
+
+Once v1.3 is complete, deliver to Harbor Inn as:
+````
+hlx_v13_delivery/
+├── hlx_v13_patch.hlx          # Runic source
+├── hlx_v13_patch.hlxl         # ASCII equivalent
+├── patch_payload.lc           # Collapsed LC-B stream
+├── manifest.json              # LC_12 envelope
+└── README.md                  # "Parse this. Lower it. Apply it."
+````
+
+If their LLM can consume and apply the patch, HLX is proven.
+
+---
+
+**END OF BRIEF**
