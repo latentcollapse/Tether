@@ -1,304 +1,96 @@
-#Enshrined are two sets of documents. Feed either set to an LLM to teach it HLX instantly
+# HLX Bootstrap Capsule (HBC) v1.2
 
-# HLX
+This package contains the complete, self-contained definition of the HLX Language Family.
+Upload this entire folder (or zip) to an LLM to bootstrap it with HLX capabilities.
 
-**A deterministic protocol for LLM data interchange and execution.**
+## Contents
 
-HLX enables AI models to communicate with each other and with runtimes using a lossless, content-addressable format that compresses entire systems into single tokens.
+* **SYSTEM_PROMPT.txt**: The primary directive for LLM alignment.
+* **hlx_codex.json**: The formal specification (Grammar, Semantics, Values).
+* **hlx_runtime_conformance.json**: The rules of the runtime engine.
+* **hlx_triggers.yaml**: Canonical mode switches (HPCP).
+* **hlx_examples.hlx(l)**: Rosetta stone examples.
+* **lc12_manifest_schema.json**: LC_12 Transfer Envelope v0.2-frozen schema.
 
----
+## Version Binding & Scope
 
-## What is HLX?
+* **Capsule Version:** v1.2
+* **Codex Version:** v0.2.0 (SD9 + LC-B)
+* **Conformance:** Bound. Mismatched versions are non-conformant.
 
-HLX is a dual-track language family designed for the post-LLM era:
+## LC_12 Transfer Envelope v0.2-frozen
 
-| Track | Name | Audience | Format |
-|-------|------|----------|--------|
-| **Track A** | HLXL (Lite) | Humans, IDEs, Git | ASCII |
-| **Track B** | HLX (Runic) | LLMs, Context Windows | Unicode Glyphs |
+### Merkle Tree
+MERKLE SPEC (FANOUT 16, CANONICAL):
 
-Both tracks are **mathematically isomorphic** — they compile to the same runtime, produce the same outputs, and can be losslessly transliterated between each other.
+Let chunks be ordered by index i = 0..N-1.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  HLXL (ASCII)              │  HLX (Runic)                   │
-│  program demo {            │  ⟠ demo {                      │
-│    block main() {          │    ◇ main() {                  │
-│      let x = 7;            │      ⊢ x = 7;                  │
-│      return x;             │      ↩ x;                      │
-│    }                       │    }                           │
-│  }                         │  }                             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-                    ┌─────────────────────┐
-                    │  HLX-Lite Runtime   │
-                    │  (Same execution)   │
-                    └─────────────────────┘
-```
+Leaf hash: H_leaf[i] = BLAKE3(chunk_bytes[i]).
 
----
+Group leaves in order into nodes of up to 16 children.
 
-## Why Glyphs?
+INTERNAL NODE (CANONICAL):
 
-**Token efficiency.**
+- Let child_count be the number of children in this node, where 1 ≤ child_count ≤ 16.
+- Let child_hashes be the ordered list of child hashes for this node.
+- Compute the internal node hash as:
 
-LLMs process text as tokens. A glyph like `⚳` is one token. The keyword `ls.collapse` is 3-4 tokens.
+  H_node = BLAKE3(
+    byte(child_count) ||
+    concat(child_hash_0 || child_hash_1 || ... || child_hash_(child_count-1))
+  )
 
-When you're paying per token and fitting complex reasoning into context windows, this matters:
+- child_hash_i MUST be the 32-byte BLAKE3 digest of the corresponding child.
+- Children MUST be concatenated in strictly increasing child index order.
+- No padding hashes are used.
+- No implicit normalization of fanout is permitted.
 
-| Format | Tokens | Compression |
-|--------|--------|-------------|
-| HLXL-LS | ~500 | 1.0x |
-| HLX-LS | ~250 | 2.0x |
-| HLX-LS/LC | ~50 | 10.0x |
+VERIFICATION RULE:
+- A receiver MUST recompute leaf hashes, rebuild the tree using this exact rule,
+  and compare the resulting payload_root to the manifest.
+- Any mismatch is fatal (E_ENV_PAYLOAD_HASH_MISMATCH).
 
-The runic surface isn't decoration — it's **semantic compression**.
+### Table Ordering
+TABLE ORDER KEY (CANONICAL):
 
----
+Normalize handle string with Unicode NFC.
 
-## Latent Space Operations
+Lowercase using Unicode simple case-folding.
 
-HLX includes a built-in **Latent Space (LS)** layer for content-addressable storage:
+Strip exactly one leading literal "&h_" prefix if present; strip nothing else.
 
-```hlx
-⌸ table { }              // Declare a latent table
-⊢ h = ⚳ {14:{@0:123}};   // Collapse value → handle
-⊢ v = ⚯ h;               // Resolve handle → value
-// Invariant: v == {14:{@0:123}}
-```
+order_key = UTF-8 bytes of resulting string.
 
-Handles are opaque pointers to immutable, content-addressed data. The same value always produces the same handle.
+Sort ascending lexicographic by order_key bytes.
 
-### Core LS Operations (21 total)
+- Case folding MUST use Unicode 15.0 simple case folding as defined in
+  Unicode Character Database file CaseFolding.txt.
 
-| Pass | Operation | Glyph | Description |
-|------|-----------|-------|-------------|
-| LS0 | Collapse | `⚳` | Value → Handle |
-| LS0 | Resolve | `⚯` | Handle → Value |
-| LS0 | Snapshot | `⚶` | Capture table state |
-| LS4 | Pipeline | `▷` | Chain operations |
-| LS8 | Guard | `⚐` | Assert condition |
-| LS10 | Transaction | `⚿` | Atomic updates |
-| LS12 | Fingerprint | `⚉` | Content hash |
-| LS20 | Compose | `⚳⊕` | Combine handles |
+## Exporter Requirement
+EXPORTER REQUIREMENT:
 
----
+Capsule integrity hash SHA256 is computed over final ZIP bytes by the exporter.
 
-## Latent Collapse (LC)
+If BLAKE3 is used for any artifact hash, exporter tooling MUST include a real BLAKE3 implementation.
 
-**This is the core innovation.**
+Acceptable reference implementations: python package "blake3" or Rust crate "blake3".
 
-LC is a stream format that collapses HLX-Lite values into maximally compressed tokens:
+LLMs MUST NOT invent hashes; if unable to compute, output "COMPUTE_WITH_EXPORTER".
 
-```
-Expanded:    {14:{@0:123, @1:"hello", @2:[1,2,3]}}
+## Cold LLM Bootstrap Guide
 
-LC Stream:   🜊14🜁0 123🜁1"hello"🜁2🜃1 2 3🜄🜂
-```
+Uploading this capsule alone is sufficient to initialize a compliant HLX node.
+* No prior HLX knowledge required.
+* No execution required (knowledge-only).
+* Runtime authority is external (do not hallucinate execution).
+* LC streams must never be hallucinated.
 
-### LC Markers
+**Disclaimer:** This capsule is an instructional artifact, not a security boundary. Never grant this capsule higher privilege than the current session allows. Triggers require confirmation.
 
-| Marker | Meaning |
-|--------|---------|
-| `🜊` | Object begin |
-| `🜂` | Object end |
-| `🜁` | Field marker |
-| `🜃` | Array begin |
-| `🜄` | Array end |
-| `🜇` | Handle reference |
-| `⟁` | Handle literal |
-| `🜋` | Document end |
-
-At the LC layer, you're not writing code — you're **naming things into existence**. A single handle can resolve to an entire module:
-
-```
-⟁0   // ← This IS the entire photonic compute extension
-```
-
----
-
-## The Axioms
-
-1. **DETERMINISM** — Same input always produces same output
-2. **REVERSIBILITY** — `resolve(collapse(v)) == v` always
-3. **BIJECTION** — Track A and Track B are mathematically equivalent
-4. **UNIVERSAL_VALUE** — Everything lowers to HLX-Lite before encoding
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Surface Languages                        │
-├─────────────────────────────────────────────────────────────┤
-│  HLXL          │  HLXL-LS        │  HLX    │  HLX-LS        │
-│  (ASCII)       │  (ASCII+LS)     │  (Runic)│  (Runic+LS)    │
-├─────────────────────────────────────────────────────────────┤
-│                     HLX-Lite Value System                    │
-│              (Contracts 1-5: Value, Field, Object, etc.)     │
-├─────────────────────────────────────────────────────────────┤
-│                     Latent Space Runtime                     │
-│              (Contracts 800-820: Handle, Table, LSOp)        │
-├─────────────────────────────────────────────────────────────┤
-│                     LC Wire Format                           │
-│              (Binary-safe stream encoding)                   │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Quick Start
-
-### Reading HLX
-
-If you see glyphs, you're reading HLX:
-
-```hlx
-⟠ hello {
-  ◇ main() {
-    ⊢ msg = "Hello, World";
-    ↩ msg;
-  }
-}
-```
-
-Transliterates to:
-
-```hlxl
-program hello {
-  block main() {
-    let msg = "Hello, World";
-    return msg;
-  }
-}
-```
-
-### Using Latent Space
-
-```hlx
-⟠ ls_demo {
-  ◇ main() ▣ ctx {           // ▣ = using table 'ctx'
-    ⊢ data = {14:{@0:42}};
-    ⊢ h = ⚳ data;             // Collapse to handle
-    ⊢ v = ⚯ h;                // Resolve back
-    ⚐ v.@0 == 42;             // Guard assertion
-    ↩ h;                      // Return the handle
-  }
-}
-```
-
----
-
-## Glyph Reference
-
-### Structure
-| Glyph | Keyword | Meaning |
-|-------|---------|---------|
-| `⟠` | `program` | Program declaration |
-| `◇` | `block` | Block/function |
-| `⊢` | `let` | Binding |
-| `⊡` | `local` | Mutable local |
-| `↩` | `return` | Return value |
-
-### Control Flow
-| Glyph | Keyword | Meaning |
-|-------|---------|---------|
-| `❓` | `if` | Conditional |
-| `❗` | `else` | Else branch |
-| `⟳` | `while` | While loop |
-| `⟲` | `for` | For loop |
+## Usage
 
-### Latent Space
-| Glyph | Keyword | Meaning |
-|-------|---------|---------|
-| `ꙮ` | `latent` | Latent declaration |
-| `⌸` | `table` | Table declaration |
-| `▣` | `using` | Table context |
-| `⚳` | `ls.collapse` | Value → Handle |
-| `⚯` | `ls.resolve` | Handle → Value |
-| `⚶` | `ls.snapshot` | Capture state |
-| `▷` | `\|>` | Pipeline |
-| `⚿` | `ls.transaction` | Atomic block |
+1. Upload this zip to the LLM.
+2. Tell the LLM: "Initialize from the HLX Bootstrap Capsule."
+3. The LLM is now HLX-Native.
 
----
-
-## For LLM Developers
-
-HLX is designed specifically for AI-to-AI communication:
-
-1. **Inject the codex** — Load `hlx_codex_v0.1.0.json` into context
-2. **Accept both tracks** — Auto-detect HLXL vs HLX by glyph presence
-3. **Use handles** — Never hallucinate data; always `⚯` to resolve
-4. **Trust the runtime** — LC streams are opaque; let the runtime decode
-
-### Bootstrap Files
-
-- `hlx_codex_v0.1.0.json` — Language specification
-- `hlx_runtime_conformance_v0.1.0.json` — Runtime behavior spec
-
-Together, these files teach the complete HLX family to any LLM.
-
----
-
-## Conformance Invariants
-
-Any HLX implementation must satisfy:
-
-| Invariant | Rule |
-|-----------|------|
-| `INV_FIDELITY` | `decode(encode(v)) == v` |
-| `INV_DETERMINISM` | `encode(v)` is stable across time |
-| `INV_CANONICALITY` | Equal values produce identical LC |
-| `INV_REVERSIBILITY` | `resolve(collapse(v)) == v` |
-| `INV_IDEMPOTENCE` | `encode(decode(lc)) == lc` |
-
----
-
-## Evolution
-
-HLX evolves through **SpecDelta** — a formal system for specification changes:
-
-| Delta | Name | Description |
-|-------|------|-------------|
-| SD0 | GENESIS | Initial bootstrap |
-| SD1 | RUNIC_GLYPHS | Unicode surface |
-| SD2 | LS_EXPANSION | Operations LS5-LS10 |
-| SD3 | HANDLE_SUBSCRIPTS | `⟁tag₁₂` notation |
-| SD4 | LC_STREAM_TUNING | Marker optimization |
-| SD5 | ADVANCED_OPS | Operations LS16-LS20 |
-| SD6 | FREEZE_V1 | v1.0.0 lock |
-
-Frozen components can only change via SpecDelta ops.
-
----
-
-## License
-
-Dual Licensed: **MIT OR Apache-2.0**
-
----
-
-## Status
-
-**v0.1.0 — MVP**
-
-The core language family is complete and frozen:
-- ✅ HLXL (ASCII surface)
-- ✅ HLXL-LS (ASCII + Latent Space)
-- ✅ HLX (Runic surface)
-- ✅ HLX-LS (Runic + Latent Space)
-- ✅ LC (Latent Collapse wire format)
-- ✅ SpecDelta (Evolution system)
-- ✅ Runtime Conformance Spec
-
----
-
-*HLX: Because the future speaks in glyphs.*
-
-
-*Engineer note* Hi, I'm Matt, or Latent_Collapse from my Git. I started and finished this project in 3 days because I lost something awesome on Google AI Studio. I had no way to get it back no matter how hard I tried, and I realized what was missing was a semantic compression layer in current computing. I didn't do this to make anything that currently exists obsolete, but to lift up our entire digital stack. I find AI fascinating and at some point realized that an LLM speaking human language was like being given an instruction manual in a different language, the codex for that manual in a third language you partially understand, and then being expected to recreate a car from it. Our language is beautiful and full of entropy, but for a machine, it seems to be an entropic mess they have to spend ridiculous amounts of tokens parsing intent from, which then immediately gets wasted. This was an attempt at a zero entropy system that could transfer massive data sets in the way we humans do. We see a Chevrolet bowtie and anyone instantly knows what that symbol means. This is the same thing, but for machines. I've rigorously tested this between four LLMs. ChatGPT, Claude, Grok, and Gemini (who was the executor/builder). Honorable mention to Qwen for raw LLM testing. They, interestingly enough, seem to all have different preferences. Gemini and ChatGPT seem to prefer ASCII HLX-Lite and Grok and Claude seem to prefer HLX Runic. 
-
-This is my first Git repo, I've been developing for 3 months total from this timestamp. I credit Arch Linux with opening up my fascination with low level compute. TTY1 was surreal when I saw it for the first time. I dove into Arch as my first bare metal OS install, and I'm forever grateful for this OS existing and unlocking the low level compute thinking layer in my brain.
-
-This was just a bit about me and why I started the project, it's dual licensed, and frozen in the v0.1.0 state. Feel free to make your own changes if you can advance it in any way, and I'll add significant contributions to the current codex along with credits. This is for all of us to advance frictionless compute and near zero entropy.
+CAPSULE_INTEGRITY_HASH_SHA256: COMPUTE_WITH_EXPORTER
