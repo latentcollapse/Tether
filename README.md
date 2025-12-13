@@ -93,4 +93,5 @@ Uploading this capsule alone is sufficient to initialize a compliant HLX node.
 2. Tell the LLM: "Initialize from the HLX Bootstrap Capsule."
 3. The LLM is now HLX-Native.
 
-CAPSULE_INTEGRITY_HASH_SHA256: COMPUTE_WITH_EXPORTER
+CAPSULE_INTEGRITY_HASH_SHA256: <github-provided-sha256>
+
