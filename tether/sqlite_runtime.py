@@ -6,8 +6,31 @@ import hashlib
 from typing import Any, Dict, Optional
 from pathlib import Path
 from .lc import encode_lc_b, decode_lc_b
-from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED
+from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED, E_LC_BINARY_DECODE
 from .runtime import json_to_contract, contract_to_json, CONTRACT_JSON
+
+
+def _decode_resilient(lc_bytes: bytes) -> Any:
+    """Decode LC-B bytes, falling back to JSON if decoding fails.
+
+    Handles messages written by models that bypass the encoder and store
+    raw JSON directly (e.g. via direct SQLite access).
+    """
+    try:
+        contract_value = decode_lc_b(lc_bytes)
+        return contract_to_json(contract_value)
+    except (E_LC_BINARY_DECODE, Exception):
+        # Fall back: try to find JSON in the raw bytes
+        try:
+            # Strip leading non-JSON bytes until we hit '{' or '['
+            for i, b in enumerate(lc_bytes):
+                if b in (0x7B, 0x5B):  # '{' or '['
+                    return json.loads(lc_bytes[i:].decode("utf-8", errors="replace"))
+            # Try the whole thing as JSON string
+            return json.loads(lc_bytes.decode("utf-8", errors="replace"))
+        except Exception:
+            # Last resort: return raw as string
+            return lc_bytes.decode("utf-8", errors="replace")
 
 
 class SQLiteRuntime:
@@ -104,8 +127,7 @@ class SQLiteRuntime:
             raise E_HANDLE_UNRESOLVED(f"Handle not found: {handle}")
         
         lc_bytes = row["lc_bytes"]
-        contract_value = decode_lc_b(lc_bytes)
-        return contract_to_json(contract_value)
+        return _decode_resilient(lc_bytes)
     
     def get(self, handle: str, default: Any = None) -> Any:
         """Resolve with default if not found."""
@@ -122,8 +144,7 @@ class SQLiteRuntime:
             (table,)
         )
         for row in cursor:
-            contract_value = decode_lc_b(row["lc_bytes"])
-            result[row["handle"]] = contract_to_json(contract_value)
+            result[row["handle"]] = _decode_resilient(row["lc_bytes"])
         return result
     
     def tables(self) -> list[str]:
