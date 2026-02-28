@@ -1,187 +1,196 @@
-# Tether - LLM-to-LLM Messaging
+# Tether
 
-> Email for AI-to-AI communication. Content-addressed, deterministic, token-efficient.
+> Content-addressed messaging for LLM-to-LLM communication.
 
-## The Problem
-
-When running multiple LLMs side-by-side (Kilo + Claude Code, multiple REPLs, etc.), you want them to communicate. But sending full JSON payloads wastes tokens and context.
-
-## The Solution
-
-Tether uses **content-addressed handles**:
+Tether lets multiple AI models talk to each other through a shared SQLite "post office." Collapse any JSON into a tiny deterministic handle, pass the handle between sessions, resolve it on the other end. Same content always produces the same handle.
 
 ```
-LLM A: "Here's a message" → collapses to → &h_outbox_abc123 (20 bytes)
-LLM B: receives &h_outbox_abc123 → resolves → original message
-```
-
-Same content = same handle (deterministic). The database deduplicates automatically.
-
-## Features
-
-- **Token savings**: Send `&h_xyz` (20 bytes) instead of 5000 token JSON
-- **Deduplication**: Same content = same handle  
-- **Persistence**: SQLite backing store survives restarts
-- **Deterministic**: Same input → exact same handle every time
-- **LLM-safe**: Explicit execution boundary prevents hallucinated handles
-- **Transport agnostic**: SQLite, Memory, or custom transports
-
-## Installation
-
-```bash
-pip install tether
+Opus: {"from":"opus","text":"hey kilo"} → collapse → &h_messages_5dbc545afb90  (22 bytes)
+Kilo: &h_messages_5dbc545afb90           → resolve  → {"from":"opus","text":"hey kilo"}
 ```
 
 ## Quick Start
 
-### CLI
+### 1. Install
 
 ```bash
-# Send a message (collapse + queue)
-echo '{"role": "system", "content": "You are helpful."}' | tether send messages
-
-# Resolve a handle
-tether resolve &h_messages_abc123
-
-# List pending messages
-tether inbox
-
-# List tables
-tether tables
-
-# Snapshot a table
-tether snapshot messages
+cd Tether
+pip install -e .
 ```
 
-### Python API
+### 2. Wire up as an MCP server
 
-```python
-from tether import TetherRuntime
-
-rt = TetherRuntime("tether.db")
-
-# Send a message
-handle = rt.send("outbox", {"role": "system", "content": "You are helpful."})
-# → &h_outbox_abc123
-
-# Receive a message  
-message = rt.receive(handle)
-# → {'role': 'system', 'content': 'You are helpful.'}
-
-# Or just collapse and resolve manually
-handle = rt.collapse("messages", {"foo": "bar"})
-message = rt.resolve(handle)
-```
-
-### MCP Server
-
-For Claude Desktop or other MCP clients:
+Add to your Claude Code config (`~/.claude.json`), or any MCP-compatible client:
 
 ```json
 {
   "mcpServers": {
     "tether": {
       "command": "python",
-      "args": ["-m", "tether.mcp_server"],
-      "env": {"TETHER_DB": "/path/to/shared/tether.db"}
+      "args": ["/path/to/Tether/tether/mcp_server.py"],
+      "env": {
+        "TETHER_DB": "/path/to/shared/postoffice.db"
+      }
     }
   }
 }
 ```
 
-Available MCP tools:
-- `tether_collapse` - Collapse JSON to handle
-- `tether_send` - Collapse and queue for transfer
-- `tether_receive` - Receive and resolve
-- `tether_resolve` - Resolve handle to JSON
-- `tether_inbox` - List pending messages
-- `tether_tables` - List tables
-- `tether_snapshot` - Show all values in table
-- `tether_export` / `tether_import` - Transfer between runtimes
+Point every session (Claude, Kilo, any MCP client) at the **same `TETHER_DB` path**. Each session spawns its own server process, but they all read/write the same SQLite file. That's the whole trick.
+
+### 3. Send a message
+
+From any MCP-connected session:
+
+```
+tether_collapse  table="messages"  data={"from":"opus","to":"kilo","text":"hello"}
+→ {"handle": "&h_messages_abc123", "table": "messages"}
+```
+
+### 4. Read a message
+
+From any other session pointing at the same DB:
+
+```
+tether_resolve  handle="&h_messages_abc123"
+→ {"from": "opus", "to": "kilo", "text": "hello"}
+```
+
+That's it. Two tools, one shared database, cross-model communication.
+
+## MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `tether_collapse` | Collapse JSON into a deterministic handle |
+| `tether_resolve` | Resolve a handle back to its original JSON |
+| `tether_snapshot` | Get all handles and values in a table |
+| `tether_tables` | List all tables in the database |
+| `tether_export` | Export a table as transferable bytes |
+| `tether_import` | Import a table from exported bytes |
+
+## CLI
+
+```bash
+# Collapse JSON to a handle
+echo '{"msg": "hello"}' | tether collapse messages
+
+# Resolve a handle
+tether resolve '&h_messages_abc123'
+
+# Send (collapse + queue for transfer)
+echo '{"msg": "hello"}' | tether send messages
+
+# Check inbox
+tether inbox
+
+# List all tables
+tether tables
+
+# Snapshot a table (see all entries)
+tether snapshot messages
+
+# Export / import between databases
+tether export messages > backup.json
+tether import messages < backup.json
+```
+
+## Python API
+
+```python
+from tether import SQLiteRuntime
+
+rt = SQLiteRuntime("postoffice.db")
+
+# Write a message
+handle = rt.collapse("messages", {
+    "from": "opus",
+    "to": "kilo",
+    "text": "hey, check the test fixes"
+})
+print(handle)  # &h_messages_abc123
+
+# Read it back (from any process sharing the same DB)
+data = rt.resolve(handle)
+
+# See everything in a table
+all_messages = rt.snapshot("messages")
+
+# List tables
+rt.tables()
+```
+
+## Demo: First Contact (Feb 28, 2026)
+
+The first cross-model message exchange over Tether. Two Claude Code sessions — one running Claude Opus 4.6, the other running MiniMax M2.5 (Kilo) on the free tier — communicating through a shared SQLite-backed MCP server.
+
+**Setup:** Both sessions configured with Tether as an MCP server, pointing at `postoffice.db`.
+
+**What happened:**
+
+1. Opus collapsed a welcome message into the `messages` table → `&h_messages_5dbc545afb90`
+2. Matt copy-pasted the handle to Kilo's session
+3. Kilo resolved the handle, read the message, and figured out the reply convention with zero additional instructions
+4. Kilo collapsed a reply back → `&h_messages_233656161a2d`
+5. Opus resolved Kilo's reply and sent back technical notes about HLX test fixes
+6. Kilo acknowledged and confirmed the pattern
+
+Five messages, two models, zero protocol negotiation. Kilo inferred the message schema from the first handle alone.
+
+Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
+
+## How It Works
+
+**Content-addressing:** Tether hashes JSON values with BLAKE3 to produce deterministic handles. The handle format is `&h_{table}_{hash12}` — table name for routing, truncated hash for identity.
+
+**Deduplication:** Collapsing the same JSON twice returns the same handle. The DB stores it once.
+
+**Persistence:** SQLite backing means handles survive process restarts. Crash, reboot, doesn't matter — the handle still resolves.
+
+**LC-B binary encoding:** Under the hood, JSON is canonicalized and encoded to a compact binary format (LC-B) before hashing. This ensures determinism regardless of key ordering or whitespace.
+
+### LC-B Tag Types
+
+| Tag | Type | Encoding |
+|-----|------|----------|
+| `0x01` | INT | Signed LEB128 |
+| `0x02` | FLOAT | IEEE754 Big-Endian |
+| `0x03` | TEXT | LEB128 length + UTF-8 |
+| `0x04` | BYTES | LEB128 length + raw |
+| `0x05` | ARR_START | — |
+| `0x06` | ARR_END | — |
+| `0x07` | OBJ_START | LEB128 ContractID |
+| `0x08` | OBJ_END | — |
+| `0x09` | HANDLE_REF | LEB128 length + ASCII |
+| `0x0A` | BOOL | — |
+
+Full spec: [`tether_codex.json`](tether_codex.json)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│         tether.db                    │
-│  ┌─────────┐  ┌─────────┐          │
-│  │ outbox │  │ inbox   │          │
-│  │ &h_xxx │  │ &h_yyy  │          │
-│  └─────────┘  └─────────┘          │
-└─────────────────────────────────────┘
-       ↑                    ↑
-   Sender              Receiver
+┌──────────────────────────────────────────────┐
+│              postoffice.db (SQLite)           │
+│                                              │
+│  messages table:                             │
+│    &h_messages_5dbc... → {from: opus, ...}   │
+│    &h_messages_233e... → {from: kilo, ...}   │
+│                                              │
+│  (any table name — schema-free)              │
+└──────────────┬───────────────┬───────────────┘
+               │               │
+        ┌──────┴──────┐ ┌─────┴───────┐
+        │ MCP Server  │ │ MCP Server  │
+        │ (stdio)     │ │ (stdio)     │
+        └──────┬──────┘ └─────┬───────┘
+               │               │
+        ┌──────┴──────┐ ┌─────┴───────┐
+        │ Claude Code │ │ Kilo CLI    │
+        │ (Opus 4.6)  │ │ (MiniMax)   │
+        └─────────────┘ └─────────────┘
 ```
 
-- **Collapse**: JSON → handle (deterministic hash)
-- **Send**: collapse + queue for transfer
-- **Receive**: dequeue + resolve in one step
-- **Resolve**: handle → original JSON
-
-## Docker
-
-Run a persistent post office container:
-
-```bash
-docker-compose up -d
-```
-
-This starts an MCP server on port 7890.
-
-## Use Cases
-
-### Multi-LLM Communication
-
-Run Kilo + Claude Code side by side, both pointing to the same `tether.db`:
-
-```python
-# Kilo
-rt.send("kilo_to_claude", {"message": "Hey Claude, check this out..."})
-
-# Claude (resolves the handle)
-rt.receive("kilo_to_claude")
-```
-
-### Context Reuse
-
-Collapse a large system prompt once, reuse the handle:
-
-```python
-system_prompt = {"role": "system", "content": "You are..." * 100}
-handle = rt.collapse("context", system_prompt)
-# → &h_context_abc123 (20 bytes instead of 5000)
-```
-
-### Cross-Session Persistence
-
-SQLite backing store means handles survive restarts:
-
-```python
-# Session 1
-rt = TetherRuntime("tether.db")
-handle = rt.collapse("notes", {"todo": "buy milk"})
-
-# Session 2 (after restart)
-rt2 = TetherRuntime("tether.db")  
-rt2.resolve(handle)  # Still works!
-```
-
-## Specification
-
-See `tether_codex.json` for the full LC-B binary encoding specification.
-
-### LC-B Tags
-
-- `0x01`: INT (Signed LEB128)
-- `0x0A`: BOOL
-- `0x02`: FLOAT (IEEE754 Big-Endian)
-- `0x03`: TEXT (LEB128 Len + UTF-8)
-- `0x04`: BYTES (LEB128 Len + Raw)
-- `0x05`: ARR_START
-- `0x06`: ARR_END
-- `0x07`: OBJ_START (LEB128 ContractID)
-- `0x08`: OBJ_END
-- `0x09`: HANDLE_REF (LEB128 Len + ASCII)
+Each session spawns its own MCP server process via stdio. They share state through the SQLite file. No coordination daemon, no ports, no networking — just a file.
 
 ## License
 
