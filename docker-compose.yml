@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  tether-post-office:
+    build: .
+    container_name: tether-post-office
+    ports:
+      - "7890:7890"
+    volumes:
+      - tether-data:/data
+    environment:
+      - TETHER_DB=/data/tether.db
+      - TETHER_HOST=0.0.0.0
+      - TETHER_PORT=7890
+    restart: unless-stopped
+
+volumes:
+  tether-data:

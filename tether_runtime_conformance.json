@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "name": "Tether Runtime Conformance Spec",
+    "version": "1.0.0",
+    "capsule_version": "v1.0.0",
+    "status": "CANONICAL_ROOT",
+    "generated_at": "2025-12-13T18:00:00Z",
+    "encoding": "UTF-8",
+    "language_codex_ref": "tether_codex.json",
+    "codex_hash": "sha256:COMPUTE_ME"
+  },
+  "1_scope_and_roles": {
+    "roles": {
+      "LLM": {
+        "analogy": "CPU / Orchestrator",
+        "responsibility": "Generating intent (Tether), formulating logic, requesting operations.",
+        "restriction": "MUST NOT hallucinate handle contents. MUST NOT attempt to parse raw LC-B streams manually. MUST NOT compute authoritative hashes."
+      },
+      "Runtime": {
+        "analogy": "RAM / Disk / Physics Engine",
+        "responsibility": "Storing values (CAS), resolving handles, enforcing invariants, validating contracts.",
+        "authority": "Absolute source of truth for data integrity and state."
+      }
+    }
+  },
+  "2_core_data_model": {
+    "handles": {
+      "format": "&h_<tag>_<id>",
+      "resolution": "Handles are opaque pointers to immutable content-addressed blobs."
+    },
+    "tables": {
+      "definition": "A Latent Table is a scoped namespace mapping Handles to canonical Tether Values."
+    }
+  },
+  "3_cas_rules": {
+    "table_order_key": "TABLE ORDER KEY (CANONICAL): Normalize handle string with Unicode NFC. Lowercase using Unicode simple case-folding. Strip exactly one leading literal \"&h_\" prefix if present; strip nothing else. order_key = UTF-8 bytes of resulting string. Sort ascending lexicographic by order_key bytes. - Case folding MUST use Unicode 15.0 simple case folding as defined in Unicode Character Database file CaseFolding.txt. Non-ASCII handles raise E_HANDLE_INVALID."
+  },
+  "4_error_model": {
+    "codes": {
+      "E_LC_PARSE": "Invalid LC-B syntax",
+      "E_LC_BINARY_DECODE": "Invalid LC-B encoding",
+      "E_FIELD_ORDER": "Fields out of order",
+      "E_CANONICALIZATION_FAIL": "Non-canonical structure (e.g., cycles)",
+      "E_HANDLE_UNRESOLVED": "Handle requires runtime resolution",
+      "E_HANDLE_INVALID": "Handle contains non-ASCII or invalid characters",
+      "E_VALIDATION_FAIL": "Execution requested outside LLM authority",
+      "E_ENV_PAYLOAD_HASH_MISMATCH": "Merkle root mismatch",
+      "E_ENV_MANIFEST_INVALID": "Invalid LC_12 manifest",
+      "E_CONTRACT_STRUCTURE": "Invalid contract object structure"
+    }
+  },
+  "5_test_vectors": {
+    "description": "Mandatory test cases for Runtime conformance (LC-B). Total Vectors: 11 Positive, 9 Negative.",
+    "vectors": [
+      {
+        "name": "T0_Primitive_Int",
+        "input": 123,
+        "lc_binary_hex": "01 7B"
+      },
+      {
+        "name": "T1_Primitive_String",
+        "input": "hello",
+        "lc_binary_hex": "03 05 68 65 6C 6C 6F"
+      },
+      {
+        "name": "T2_Simple_Object",
+        "input": {
+          "14": {
+            "@0": 1
+          }
+        },
+        "lc_binary_hex": "07 0E 00 01 01 08"
+      },
+      {
+        "name": "T3_Nested_Object",
+        "input": {
+          "14": {
+            "@0": {
+              "15": {
+                "@0": "inner"
+              }
+            }
+          }
+        },
+        "lc_binary_hex": "07 0E 00 07 0F 00 03 05 69 6E 6E 65 72 08 08"
+      },
+      {
+        "name": "T4_Empty_Array",
+        "input": [],
+        "lc_binary_hex": "05 06"
+      },
+      {
+        "name": "T5_Array_Of_Ints",
+        "input": [1, 2, 3],
+        "lc_binary_hex": "05 01 01 01 02 01 03 06"
+      },
+      {
+        "name": "T6_Nested_Array",
+        "input": [[1], [2, 3]],
+        "lc_binary_hex": "05 05 01 01 06 05 01 02 01 03 06 06"
+      },
+      {
+        "name": "T7_Handle_Ref",
+        "input": {
+          "HANDLE_REF": "&h_foo_0"
+        },
+        "lc_binary_hex": "09 08 26 68 5F 66 6F 6F 5F 30"
+      },
+      {
+        "name": "T8_Multi_Field_Object",
+        "input": {
+          "20": {
+            "@0": 1,
+            "@1": "two",
+            "@2": true
+          }
+        },
+        "lc_binary_hex": "07 14 00 01 01 01 03 03 74 77 6F 02 0A 01 08",
+        "note": "Fields sorted by index. Boolean uses BOOL tag 0x0A."
+      },
+      {
+        "name": "T9_Float_Value",
+        "input": 3.14159,
+        "lc_binary_hex": "02 40 09 21 F9 F0 1B 86 6E",
+        "note": "IEEE 754 double, big-endian"
+      },
+      {
+        "name": "T10_Empty_Object",
+        "input": {"1": {}},
+        "lc_binary_hex": "07 01 08"
+      }
+    ],
+    "negative_vectors": [
+      {
+        "name": "N1_Whitespace_Object",
+        "input": "{ 14 : ... }",
+        "expected_error": "E_LC_PARSE"
+      },
+      {
+        "name": "N2_Invalid_Tag_LC_B",
+        "input_lc_binary_hex": "FF 01",
+        "expected_error": "E_LC_BINARY_DECODE"
+      },
+      {
+        "name": "N3_Cycle_Detection",
+        "input_kind": "cycle_handle_ref",
+        "input": {
+          "self_handle": "&h_bootstrap_0",
+          "value": {
+            "14": {
+              "@0": {
+                "HANDLE_REF": "&h_bootstrap_0"
+              }
+            }
+          }
+        },
+        "expected_error": "E_CANONICALIZATION_FAIL"
+      },
+      {
+        "name": "N4_LCB_TRUNCATED",
+        "input_lc_binary_hex": "01",
+        "expected_error": "E_LC_BINARY_DECODE"
+      },
+      {
+        "name": "N5_Unsorted_Fields",
+        "input": {
+          "10": {
+            "@2": 1,
+            "@0": 2
+          }
+        },
+        "expected_error": "E_FIELD_ORDER"
+      },
+      {
+        "name": "N6_Overlong_LEB128",
+        "input_lc_binary_hex": "07 FF FF FF FF FF FF FF FF FF 7F 08",
+        "expected_error": "E_LC_BINARY_DECODE",
+        "note": "Overlong LEB128 contract ID"
+      },
+      {
+        "name": "N7_Unknown_Tag",
+        "input_lc_binary_hex": "0A 01 01",
+        "expected_error": "E_LC_BINARY_DECODE",
+        "note": "Tag 0x0A is undefined"
+      },
+      {
+        "name": "N8_Trailing_Bytes",
+        "input_lc_binary_hex": "01 7B FF FF",
+        "expected_error": "E_LC_BINARY_DECODE",
+        "note": "Valid INT followed by garbage"
+      },
+      {
+        "name": "N9_LEB128_Length_Mismatch",
+        "input_lc_binary_hex": "03 05 68 65 6C",
+        "expected_error": "E_LC_BINARY_DECODE",
+        "note": "TEXT claims 5 bytes, only 3 provided"
+      }
+    ]
+  }
+}

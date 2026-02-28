@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tether"
+version = "1.0.0"
+description = "Deterministic data transfer format for LLM-to-LLM communication"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["mcp>=1.0.0"]
+
+[project.scripts]
+tether = "tether.__main__:main"
+tether-mcp = "tether.mcp_server:main"

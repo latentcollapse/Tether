@@ -1,0 +1,69 @@
+(* Tether Grammar — EBNF *)
+(* Pure ASCII. Single track surface syntax. *)
+
+program      = "program" , identifier , "{" , { block } , "}" ;
+
+block        = identifier , "(" , [ param_list ] , ")" , "{" , { statement } , "}" ;
+
+param_list   = identifier , { "," , identifier } ;
+
+statement    = let_stmt
+             | local_stmt
+             | return_stmt
+             | if_stmt
+             | while_stmt
+             | for_stmt
+             | expr_stmt ;
+
+let_stmt     = "let" , identifier , "=" , expr , ";" ;
+local_stmt   = "local" , identifier , "=" , expr , ";" ;
+return_stmt  = "return" , expr , ";" ;
+
+if_stmt      = "if" , "(" , expr , ")" , "{" , { statement } , "}"
+             , [ "else" , "{" , { statement } , "}" ] ;
+
+while_stmt   = "while" , "(" , expr , ")" , "{" , { statement } , "}" ;
+
+for_stmt     = "for" , "(" , identifier , "in" , expr , ")" , "{" , { statement } , "}" ;
+
+expr_stmt    = expr , ";" ;
+
+expr         = pipe_expr ;
+
+pipe_expr    = primary , { "|>" , primary } ;
+
+primary      = ls_op
+             | handle_ref
+             | value
+             | identifier
+             | "(" , expr , ")" ;
+
+ls_op        = ls_operator , identifier , { identifier } , [ expr ] ;
+
+ls_operator  = "ls.collapse" | "ls.resolve" | "ls.snapshot" | "ls.transaction" ;
+
+handle_ref   = "&h_" , identifier , [ subscript ] ;
+
+subscript    = subscript_digit , { subscript_digit } ;
+subscript_digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+value        = object | array | string | number | boolean | null ;
+
+object       = "{" , contract_id , ":" , "{" , [ field_list ] , "}" , "}" ;
+contract_id  = integer ;
+field_list   = field_entry , { "," , field_entry } ;
+field_entry  = "@" , integer , ":" , value ;
+
+array        = "[" , [ value , { "," , value } ] , "]" ;
+
+string       = '"' , { character } , '"' ;
+number       = integer | float ;
+integer      = [ "-" ] , digit , { digit } ;
+float        = integer , "." , digit , { digit } ;
+boolean      = "true" | "false" ;
+null         = "null" ;
+
+identifier   = letter , { letter | digit | "_" } ;
+letter       = "a".."z" | "A".."Z" ;
+digit        = "0".."9" ;
+character    = (* any UTF-8 character except unescaped '"' *) ;

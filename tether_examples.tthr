@@ -1,0 +1,54 @@
+// Tether Examples
+// Demonstrates Tether syntax, lowering, and LC-B encoding only.
+// No execution or runtime behavior implied.
+
+program hello_world {
+  main() {
+    // 1. Define Value
+    let ast_value = {14:{@0:123}};
+    
+    // 2. Collapse to Handle
+    let ast_handle = ls.collapse bootstrap_table ast ast_value;
+    
+    // 3. Resolve back to Value
+    return ls.resolve bootstrap_table ast_handle;
+  }
+}
+
+// Example: Nested Object
+program nested_example {
+  main() {
+    let data = {
+      14: {
+        @0: {
+          15: {
+            @0: "inner"
+          }
+        }
+      }
+    };
+    return data;
+  }
+}
+
+// Example: Array Operations
+program array_example {
+  main() {
+    let arr = [1, 2, 3];
+    return arr;
+  }
+}
+
+// Example: Multi-field Object
+program multi_field_example {
+  main() {
+    let obj = {
+      20: {
+        @0: 1,
+        @1: "two",
+        @2: true
+      }
+    };
+    return obj;
+  }
+}

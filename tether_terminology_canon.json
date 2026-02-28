@@ -1,0 +1,87 @@
+{
+  "document": "Tether Terminology Canon",
+  "version": "1.0.0",
+  "authority": "NORMATIVE",
+  "scope": "Terminology only. No semantics. No execution behavior.",
+  "purpose": "Prevent terminology drift and misinterpretation across models, tools, and runtimes.",
+  "global_rule": {
+    "statement": "If a term is defined in this file, that definition is binding across all Tether artifacts.",
+    "conflict_resolution": "This file overrides informal or implied usage elsewhere."
+  },
+  "layers": [
+    {
+      "name": "Tether",
+      "type": "Surface Language (ASCII)",
+      "description": "Primary human-authored ASCII surface language for data transfer.",
+      "authority": "Human and tooling authoring",
+      "notes": "Single track. No runic variant."
+    },
+    {
+      "name": "LS",
+      "type": "Latent Space",
+      "description": "Runtime-resident latent tables, handles, and content-addressable state.",
+      "authority": "Runtime only",
+      "hard_lock": [
+        "LS ALWAYS means Latent Space.",
+        "LS is NOT a surface syntax.",
+        "LS is NOT a lowered surface.",
+        "LS is NOT a serialization format."
+      ],
+      "examples": [
+        "ls.collapse",
+        "ls.resolve",
+        "ls.snapshot",
+        "ls.transaction"
+      ]
+    },
+    {
+      "name": "LC-B",
+      "type": "Latent Collapse — Binary",
+      "description": "Canonical binary encoding of latent collapse.",
+      "authority": "Hashing and transport",
+      "notes": [
+        "Authoritative for integrity.",
+        "Used by LC_12 envelopes.",
+        "Text syntax must lower to LC-B without loss."
+      ]
+    },
+    {
+      "name": "LC_12",
+      "type": "Transfer Envelope",
+      "description": "Chunking, Merkle hashing, and content-addressable transport layer.",
+      "authority": "Provable 1:1 transfer",
+      "notes": [
+        "Wraps LC-B payloads.",
+        "Provides exaflopic-scale integrity guarantees."
+      ]
+    },
+    {
+      "name": "Handle",
+      "type": "Content Address",
+      "description": "Opaque pointer to immutable content-addressed blob.",
+      "format": "&h_<tag>_<id>",
+      "authority": "Runtime resolution"
+    },
+    {
+      "name": "Contract",
+      "type": "Type Schema",
+      "description": "Numeric ID defining object structure.",
+      "authority": "Structural validation"
+    }
+  ],
+  "explicit_non_meanings": [
+    {
+      "term": "LS",
+      "invalid_meanings": [
+        "Lowered Surface",
+        "Low-level Syntax",
+        "Linear Stream",
+        "Language Stage"
+      ]
+    }
+  ],
+  "invariant": {
+    "statement": "Tether may be elegant. Text may be readable. LC-B must be correct.",
+    "implication": "Aesthetic considerations never override canonical transport authority."
+  }
+}

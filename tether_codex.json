@@ -1,0 +1,156 @@
+{
+  "meta": {
+    "title": "Tether Unified Codex",
+    "version": "1.0.0",
+    "status": "CANONICAL_ROOT",
+    "generated_at": "2025-12-13T18:00:00Z",
+    "encoding": "UTF-8",
+    "hash_algo": "BLAKE3",
+    "architecture_class": "TRANSPORT",
+    "architecture_statement": "Tether specifies canonical encoding, ordering, and transfer of values. It does not define semantic meaning or execution behavior.",
+    "purpose": "Didactic injection of the Tether Data Transfer Format into LLM context. This file is the single source of truth for bootstrapping Tether capability.",
+    "terminology_canon": "tether_terminology_canon.json"
+  },
+  "1_axioms": {
+    "description": "The inviolable truths governing the Tether architecture.",
+    "axioms": [
+      {
+        "id": "A1",
+        "name": "DETERMINISM",
+        "rule": "The same input data must ALWAYS produce the same LC-B stream."
+      },
+      {
+        "id": "A2",
+        "name": "REVERSIBILITY",
+        "rule": "Any value collapsed into a Handle can be resolved back to its exact original state."
+      },
+      {
+        "id": "A3",
+        "name": "BIJECTION",
+        "rule": "Text syntax and binary encoding are mathematically isomorphic. They map 1:1."
+      },
+      {
+        "id": "A4",
+        "name": "UNIVERSAL_VALUE",
+        "rule": "All syntaxes lower to the Tether Value System (Contracts 1-7) before encoding."
+      }
+    ]
+  },
+  "contract_registry_ref": {
+    "file": "tether_contracts.json",
+    "policy": {
+      "unknown_contracts": "ALLOWED",
+      "validation_level": "STRUCTURAL_ONLY",
+      "semantic_interpretation": "EXTERNAL",
+      "execution": "OUT_OF_SCOPE"
+    },
+    "note": "Contract IDs may be unknown. Unknown ≠ invalid. Validation is structural only."
+  },
+  "2_architecture": {
+    "description": "Single Track Architecture. Pure ASCII text, binary wire format.",
+    "tracks": {
+      "track_a_text": {
+        "name": "Tether (ASCII)",
+        "audience": "Humans, LLMs, IDEs, Git, CI/CD, Context Windows, Vector Stores",
+        "format": "ASCII Text",
+        "pipeline": "Tether (Source) -> Tether Value -> LC-B Stream"
+      }
+    },
+    "convergence": {
+      "point": "Tether Value System",
+      "wire": "LC-B (Latent Collapse Binary) Stream"
+    }
+  },
+  "3_foundation_values": {
+    "description": "The atomic type system underlying Tether. It defines HOW data is structured.",
+    "primitive_types": {
+      "NULL": {
+        "id": 0,
+        "lc_marker": "Implied by Contract"
+      },
+      "BOOL": {
+        "id": 1,
+        "values": [
+          "true",
+          "false"
+        ]
+      },
+      "INT": {
+        "id": 2,
+        "format": "Signed 64-bit LEB128"
+      },
+      "FLOAT": {
+        "id": 3,
+        "format": "IEEE 754 Double"
+      },
+      "TEXT": {
+        "id": 4,
+        "format": "UTF-8 String"
+      },
+      "BYTES": {
+        "id": 5,
+        "format": "Raw Byte Sequence"
+      },
+      "ARRAY": {
+        "id": 6,
+        "format": "Ordered List"
+      },
+      "OBJECT": {
+        "id": 7,
+        "format": "Typed Map (ContractID + Sorted Fields)"
+      }
+    },
+    "field_notation": {
+      "syntax": "@N",
+      "description": "@N denotes zero-based field index N within a contract object.",
+      "rule": "Fields MUST be encoded in ascending index order in LC-B. Violations raise E_FIELD_ORDER."
+    }
+  },
+  "4_operations": {
+    "description": "Latent operations for handle management.",
+    "operations": {
+      "ls.collapse": {
+        "syntax": "ls.collapse <table> <handle> <value>",
+        "description": "Collapses a value into a handle in the specified table.",
+        "returns": "handle reference"
+      },
+      "ls.resolve": {
+        "syntax": "ls.resolve <table> <handle>",
+        "description": "Resolves a handle reference back to its value.",
+        "returns": "value"
+      },
+      "ls.snapshot": {
+        "syntax": "ls.snapshot <table>",
+        "description": "Creates an immutable snapshot of the table state.",
+        "returns": "snapshot handle"
+      },
+      "ls.transaction": {
+        "syntax": "ls.transaction <table> <ops>",
+        "description": "Executes atomic operations on a table.",
+        "returns": "result"
+      }
+    }
+  },
+  "5_lc_binary": {
+    "name": "LC-B (Latent Collapse Binary)",
+    "description": "The universal wire format. Canonical binary form for hashing and storage.",
+    "status": "CANONICAL",
+    "tags": {
+      "0x01": "INT (Signed LEB128)",
+      "0x0A": "BOOL (0x00 = false, 0x01 = true)",
+      "0x02": "FLOAT (IEEE754 Big-Endian)",
+      "0x03": "TEXT (LEB128 Len + UTF-8)",
+      "0x04": "BYTES (LEB128 Len + Raw)",
+      "0x05": "ARR_START",
+      "0x06": "ARR_END",
+      "0x07": "OBJ_START (LEB128 ContractID)",
+      "0x08": "OBJ_END",
+      "0x09": "HANDLE_REF (LEB128 Len + ASCII)"
+    },
+    "object_rule": "Fields encoded as <field_idx_leb128><VALUE>. Must be sorted by index.",
+    "lc_12_envelope_spec": {
+      "merkle_spec": "MERKLE SPEC (FANOUT 16, CANONICAL): Let chunks be ordered by index i = 0..N-1. Leaf hash: H_leaf[i] = BLAKE3(chunk_bytes[i]). Group leaves in order into nodes of up to 16 children. INTERNAL NODE (CANONICAL): - Let child_count be the number of children in this node, where 1 ≤ child_count ≤ 16. - Let child_hashes be the ordered list of child hashes for this node. - Compute the internal node hash as: H_node = BLAKE3( byte(child_count) || concat(child_hash_0 || child_hash_1 || ... || child_hash_(child_count-1)) ) - If child_count < 16, PAD with 32-byte zero hashes before hashing. - child_hash_i MUST be the 32-byte BLAKE3 digest of the corresponding child. - Children MUST be concatenated in strictly increasing child index order. - Root hash = top node hash. VERIFICATION RULE: - A receiver MUST recompute leaf hashes, rebuild the tree using this exact rule, and compare the resulting payload_root to the manifest. - Any mismatch is fatal (E_ENV_PAYLOAD_HASH_MISMATCH).",
+      "table_order_key": "TABLE ORDER KEY (CANONICAL): Normalize handle string with Unicode NFC. Lowercase using Unicode simple case-folding. Strip exactly one leading literal \"&h_\" prefix if present; strip nothing else. order_key = UTF-8 bytes of resulting string. Sort ascending lexicographic by order_key bytes. - Case folding MUST use Unicode 15.0 simple case folding as defined in Unicode Character Database file CaseFolding.txt. Non-ASCII handles raise E_HANDLE_INVALID."
+    }
+  }
+}
