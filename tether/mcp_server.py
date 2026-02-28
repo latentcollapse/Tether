@@ -2,7 +2,12 @@
 
 import json
 import os
+import sys
 from pathlib import Path
+
+# Ensure tether package is importable when run as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from tether import SQLiteRuntime
 from tether.exceptions import TetherError
 from mcp.server import Server
