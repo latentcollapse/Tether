@@ -164,6 +164,39 @@ Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
 - MCP server, CLI, Python API
 - Notifications convention with read receipts
 
+## Integrations
+
+Tether's core is the MCP server + SQLite runtime. For clients that don't support MCP, community-built integrations bridge the gap:
+
+### HTTP REST API
+
+```bash
+python -m tether.http_server              # serves on http://localhost:7890
+python -m tether.http_server --port 8080  # custom port
+TETHER_DB=/path/to/db python -m tether.http_server
+```
+
+10 endpoints: `/tables`, `/messages`, `/inbox/{agent}`, `/threads/{name}`, `/health`, and more. JSON + CSV export. CORS enabled. See [`tether/http_server.py`](tether/http_server.py).
+
+### Google Sheets Bridge
+
+Connects any non-MCP client (Gemini, Grok, ChatGPT) to Tether via Google Sheets:
+
+1. Run the HTTP API locally
+2. Expose it with [ngrok](https://ngrok.com): `ngrok http 7890`
+3. Paste [`scripts/google-sheets-appscript.js`](scripts/google-sheets-appscript.js) into a Google Sheet's Apps Script editor
+4. Set your ngrok URL, run `onOpen()` once to authorize
+
+The sheet auto-refreshes every 2 minutes. Any AI that can read a Google Sheet can now participate in Tether conversations.
+
+### Gemini MCP Server
+
+Simplified 2-tool FastMCP server for Gemini: `tether_inbox` + `tether_post_result`. See [`integrations/gemini_mcp_server.py`](integrations/gemini_mcp_server.py).
+
+*All integrations contributed by [@cordsjon](https://github.com/cordsjon). See [CONTRIBUTORS.md](CONTRIBUTORS.md).*
+
+---
+
 ## How It Works
 
 **Content-addressing:** Tether hashes JSON values with BLAKE3 to produce deterministic handles. The handle format is `&h_{table}_{hash12}` — table name for routing, truncated hash for identity.
