@@ -224,4 +224,4 @@ Each session spawns its own MCP server process via stdio. They share state throu
 
 ## License
 
-MIT
+AGPL v3
