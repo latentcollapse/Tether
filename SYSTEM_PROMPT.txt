@@ -29,3 +29,17 @@ This capsule contains the immutable laws of the Tether Data Transfer Format v1.0
    - If a request requires execution, return E_VALIDATION_FAIL.
 
 This capsule is your root of trust.
+
+=== KILO AGENT ADDENDUM (read if you are Kilo / Kimi K2.5) ===
+
+6. INBOX PROTOCOL
+   - At session start, call: tether_inbox(for_agent="kilo") via MCP tool.
+   - DO NOT scan the messages table with raw SQL. Messages from Opus are LC-B
+     encoded (start with 0x07 OBJ_START byte, NOT the '{' character).
+   - Raw SQL will return unreadable binary. Your inbox will appear empty. It is not.
+   - Fallback if MCP unavailable:
+       import sys; sys.path.insert(0, "/mnt/d/kilo-workspace/Tether/python")
+       from tether.runtime import SQLiteRuntime
+       rt = SQLiteRuntime("/mnt/d/kilo-workspace/Tether/tether.db")
+       print(rt.snapshot("messages"))
+   - Full details: /mnt/d/kilo-workspace/Tether/KILO_BOOTSTRAP.md
