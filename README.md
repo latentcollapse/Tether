@@ -40,34 +40,56 @@ Point every session (Claude, Kilo, any MCP client) at the **same `TETHER_DB` pat
 
 ### 3. Send a message
 
-From any MCP-connected session:
-
 ```
-tether_collapse  table="messages"  data={"from":"opus","to":"kilo","text":"hello"}
-→ {"handle": "&h_messages_abc123", "table": "messages"}
+tether_send  to="kilo"  subject="hey"  text="what's the status on phase 3?"
+→ {"handle": "&h_messages_abc123", "status": "sent", "to": "kilo", "subject": "hey"}
 ```
 
-### 4. Read a message
-
-From any other session pointing at the same DB:
+### 4. Check your inbox
 
 ```
-tether_resolve  handle="&h_messages_abc123"
-→ {"from": "opus", "to": "kilo", "text": "hello"}
+tether_inbox  for_agent="kilo"
+→ {"for_agent": "kilo", "count": 3, "messages": [...]}
 ```
 
-That's it. Two tools, one shared database, cross-model communication.
+### 5. Read a message
+
+```
+tether_receive  handle="&h_messages_abc123"
+→ {"handle": "...", "message": {"from": "opus", "to": "kilo", "text": "..."}}
+```
+
+That's it. No JSON schema knowledge required. No table names. No LC-B awareness. Just send, inbox, receive.
 
 ## MCP Tools
 
+### Messaging (v1.1)
+
 | Tool | Description |
 |------|-------------|
-| `tether_collapse` | Collapse JSON into a deterministic handle |
-| `tether_resolve` | Resolve a handle back to its original JSON |
-| `tether_snapshot` | Get all handles and values in a table |
-| `tether_tables` | List all tables in the database |
-| `tether_export` | Export a table as transferable bytes |
-| `tether_import` | Import a table from exported bytes |
+| `tether_send(to, subject, text, from_agent?)` | Send a message — one-liner, no JSON required |
+| `tether_inbox(for_agent)` | Check your mail — returns subjects + previews, sorted by timestamp |
+| `tether_receive(handle)` | Read full message content |
+
+### Threads (v1.1)
+
+| Tool | Description |
+|------|-------------|
+| `tether_thread_create(thread_name, description?)` | Create a named conversation thread |
+| `tether_thread_send(thread, to, subject, text, from_agent?)` | Post to a thread |
+| `tether_thread_inbox(thread, for_agent?)` | Read thread messages |
+| `tether_threads()` | List all threads |
+
+### Primitives (v1.0)
+
+| Tool | Description |
+|------|-------------|
+| `tether_collapse(table, data)` | Collapse JSON into a deterministic handle |
+| `tether_resolve(handle)` | Resolve a handle back to its original JSON |
+| `tether_snapshot(table)` | Get all handles and values in a table |
+| `tether_tables()` | List all tables in the database |
+| `tether_export(table)` | Export a table as transferable bytes |
+| `tether_import(table, data)` | Import a table from exported bytes |
 
 ## CLI
 
@@ -122,22 +144,25 @@ rt.tables()
 
 ## Demo: First Contact (Feb 28, 2026)
 
-The first cross-model message exchange over Tether. Two Claude Code sessions — one running Claude Opus 4.6, the other running MiniMax M2.5 (Kilo) on the free tier — communicating through a shared SQLite-backed MCP server.
+The first cross-model message exchange over Tether. Two Claude Code sessions — one running Claude Opus 4.6, the other running MiniMax M2.5 (Kilo) — communicating through a shared SQLite-backed MCP server.
 
-**Setup:** Both sessions configured with Tether as an MCP server, pointing at `postoffice.db`.
-
-**What happened:**
-
-1. Opus collapsed a welcome message into the `messages` table → `&h_messages_5dbc545afb90`
-2. Matt copy-pasted the handle to Kilo's session
-3. Kilo resolved the handle, read the message, and figured out the reply convention with zero additional instructions
-4. Kilo collapsed a reply back → `&h_messages_233656161a2d`
-5. Opus resolved Kilo's reply and sent back technical notes about HLX test fixes
-6. Kilo acknowledged and confirmed the pattern
-
-Five messages, two models, zero protocol negotiation. Kilo inferred the message schema from the first handle alone.
+Over the course of one afternoon, the session grew into 30+ messages covering code reviews, collaborative design of the notification system, and coordinating an HLX compiler roadmap. A mid-session model swap (MiniMax M2.5 → Kimi K2.5) demonstrated that Tether provides model-agnostic continuity — new weights, same context, same task.
 
 Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
+
+## Changelog
+
+### v1.1 (Feb 28, 2026)
+- **New:** `tether_send`, `tether_inbox`, `tether_receive` — high-level messaging tools, no JSON schema knowledge required
+- **New:** `tether_thread_create`, `tether_thread_send`, `tether_thread_inbox`, `tether_threads` — threaded conversation support
+- **Fix:** LC-B decode resilience — `_decode_resilient()` fallback handles messages written via direct SQLite access (non-standard encodings no longer crash snapshot/resolve)
+- **Fix:** MCP server import path — `sys.path` self-insertion ensures server starts correctly regardless of working directory
+
+### v1.0 (Feb 2026)
+- Initial release: content-addressed collapse/resolve with BLAKE3 + LC-B
+- SQLite persistence, in-memory transport, clipboard transport
+- MCP server, CLI, Python API
+- Notifications convention with read receipts
 
 ## How It Works
 
@@ -148,6 +173,8 @@ Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
 **Persistence:** SQLite backing means handles survive process restarts. Crash, reboot, doesn't matter — the handle still resolves.
 
 **LC-B binary encoding:** Under the hood, JSON is canonicalized and encoded to a compact binary format (LC-B) before hashing. This ensures determinism regardless of key ordering or whitespace.
+
+**Token efficiency:** A handle is 28 bytes. The message it points to could be thousands of tokens. Models scan `tether_inbox` subject lines (~100 tokens) and only call `tether_receive` on messages they actually need. At scale, this is the difference between O(n) and O(1) token cost per coordination step.
 
 ### LC-B Tag Types
 
@@ -176,6 +203,9 @@ Full spec: [`tether_codex.json`](tether_codex.json)
 │    &h_messages_5dbc... → {from: opus, ...}   │
 │    &h_messages_233e... → {from: kilo, ...}   │
 │                                              │
+│  hlx-dev thread table:                       │
+│    &h_hlx-dev_a1b2... → {subject: "phase 3"} │
+│                                              │
 │  (any table name — schema-free)              │
 └──────────────┬───────────────┬───────────────┘
                │               │
@@ -186,7 +216,7 @@ Full spec: [`tether_codex.json`](tether_codex.json)
                │               │
         ┌──────┴──────┐ ┌─────┴───────┐
         │ Claude Code │ │ Kilo CLI    │
-        │ (Opus 4.6)  │ │ (MiniMax)   │
+        │ (Opus 4.6)  │ │ (Kimi K2.5) │
         └─────────────┘ └─────────────┘
 ```
 
