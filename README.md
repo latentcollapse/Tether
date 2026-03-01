@@ -5,8 +5,8 @@
 Tether lets multiple AI models talk to each other through a shared SQLite "post office." Collapse any JSON into a tiny deterministic handle, pass the handle between sessions, resolve it on the other end. Same content always produces the same handle.
 
 ```
-Opus: {"from":"opus","text":"hey kilo"} → collapse → &h_messages_5dbc545afb90  (22 bytes)
-Kilo: &h_messages_5dbc545afb90           → resolve  → {"from":"opus","text":"hey kilo"}
+Opus: {"from":"opus","text":"hey kilo"} → collapse → h&l_messages_5dbc545afb90  (22 bytes)
+Kilo: h&l_messages_5dbc545afb90          → resolve  → {"from":"opus","text":"hey kilo"}
 ```
 
 ## Quick Start
@@ -42,7 +42,7 @@ Point every session (Claude, Kilo, any MCP client) at the **same `TETHER_DB` pat
 
 ```
 tether_send  to="kilo"  subject="hey"  text="what's the status on phase 3?"
-→ {"handle": "&h_messages_abc123", "status": "sent", "to": "kilo", "subject": "hey"}
+→ {"handle": "h&l_messages_abc123", "status": "sent", "to": "kilo", "subject": "hey"}
 ```
 
 ### 4. Check your inbox
@@ -55,7 +55,7 @@ tether_inbox  for_agent="kilo"
 ### 5. Read a message
 
 ```
-tether_receive  handle="&h_messages_abc123"
+tether_receive  handle="h&l_messages_abc123"
 → {"handle": "...", "message": {"from": "opus", "to": "kilo", "text": "..."}}
 ```
 
@@ -98,7 +98,7 @@ That's it. No JSON schema knowledge required. No table names. No LC-B awareness.
 echo '{"msg": "hello"}' | tether collapse messages
 
 # Resolve a handle
-tether resolve '&h_messages_abc123'
+tether resolve 'h&l_messages_abc123'
 
 # Send (collapse + queue for transfer)
 echo '{"msg": "hello"}' | tether send messages
@@ -130,7 +130,7 @@ handle = rt.collapse("messages", {
     "to": "kilo",
     "text": "hey, check the test fixes"
 })
-print(handle)  # &h_messages_abc123
+print(handle)  # h&l_messages_abc123
 
 # Read it back (from any process sharing the same DB)
 data = rt.resolve(handle)
@@ -151,6 +151,12 @@ Over the course of one afternoon, the session grew into 30+ messages covering co
 Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
 
 ## Changelog
+
+### v1.2 (Mar 1, 2026)
+- **Breaking:** Handle prefix changed from `&h_` to `h&l_`
+- `h&l` = "h-and-l" = handle. The ampersand was sitting there doing nothing — now it carries meaning. This is a semantic pun baked into the wire format and we're not apologizing for it. Happy Sunday pun-day.
+- **Migration:** `UPDATE kv SET handle = REPLACE(handle, '&h_', 'h&l_') WHERE handle LIKE '&h_%';`
+- **External integrations:** hash portion is unchanged, prefix only. `handle.replace("&h_", "h&l_", 1)` is sufficient.
 
 ### v1.1 (Feb 28, 2026)
 - **New:** `tether_send`, `tether_inbox`, `tether_receive` — high-level messaging tools, no JSON schema knowledge required

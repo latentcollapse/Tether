@@ -110,7 +110,7 @@ class TetherRuntime:
             raise E_LC_PARSE(f"Failed to encode value: {e}")
         
         handle_id = self._compute_handle_id(lc_bytes)
-        handle = f"&h_{table}_{handle_id}"
+        handle = f"h&l_{table}_{handle_id}"
         
         # Store
         conn.execute(
@@ -181,7 +181,7 @@ class TetherRuntime:
     
     def resolve(self, handle: str) -> Any:
         """Resolve a handle to its value."""
-        if not handle.startswith("&h_"):
+        if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
         
         conn = self._get_conn()

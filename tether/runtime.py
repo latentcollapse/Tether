@@ -90,7 +90,7 @@ class Runtime:
         contract_value = json_to_contract(value)
         lc_bytes = encode_lc_b(contract_value)
         handle_id = self._compute_handle_id(lc_bytes)
-        handle = f"&h_{table}_{handle_id}"
+        handle = f"h&l_{table}_{handle_id}"
         
         self._tables[table][handle] = lc_bytes
         self._content_table[handle] = value
@@ -110,7 +110,7 @@ class Runtime:
         Raises:
             E_HANDLE_UNRESOLVED: Handle not found in any table
         """
-        if not handle.startswith("&h_"):
+        if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
         
         if handle in self._content_table:

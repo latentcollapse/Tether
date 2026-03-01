@@ -101,7 +101,7 @@ class SQLiteRuntime:
         contract_value = json_to_contract(value)
         lc_bytes = encode_lc_b(contract_value)
         handle_id = self._compute_handle_id(lc_bytes)
-        handle = f"&h_{table}_{handle_id}"
+        handle = f"h&l_{table}_{handle_id}"
         
         # Store in SQLite
         self._conn.execute(
@@ -114,7 +114,7 @@ class SQLiteRuntime:
     
     def resolve(self, handle: str) -> Any:
         """Resolve a handle from SQLite."""
-        if not handle.startswith("&h_"):
+        if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
         
         cursor = self._conn.execute(
