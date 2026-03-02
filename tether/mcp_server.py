@@ -137,6 +137,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Sender agent name (defaults to 'kilo')",
                         "default": "kilo"
+                    },
+                    "ttl_seconds": {
+                        "type": "integer",
+                        "description": "Optional TTL in seconds. Message expires and becomes unresolvable after this many seconds."
                     }
                 },
                 "required": ["to", "subject", "text"]
@@ -165,6 +169,10 @@ async def list_tools() -> list[Tool]:
                     "handle": {
                         "type": "string",
                         "description": "Message handle to receive (e.g., '&h_messages_abc123')"
+                    },
+                    "for_agent": {
+                        "type": "string",
+                        "description": "Agent reading this message. Required for owner-locked messages — access denied if it doesn't match the recipient."
                     }
                 },
                 "required": ["handle"]
@@ -303,18 +311,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "to": arguments["to"],
                 "subject": arguments["subject"],
                 "text": arguments["text"],
-                "timestamp": arguments.get("timestamp")  # Optional, will be added by runtime if missing
             }
-            handle = runtime.collapse("messages", message_data)
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "handle": handle,
-                    "status": "sent",
-                    "to": arguments["to"],
-                    "subject": arguments["subject"]
-                })
-            )]
+            ttl_seconds = arguments.get("ttl_seconds")
+            handle = runtime.collapse(
+                "messages",
+                message_data,
+                ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
+                owner=arguments["to"],  # P.O. Box: only the recipient can resolve
+            )
+            result = {
+                "handle": handle,
+                "status": "sent",
+                "to": arguments["to"],
+                "subject": arguments["subject"],
+            }
+            if ttl_seconds is not None:
+                result["ttl_seconds"] = int(ttl_seconds)
+            return [TextContent(type="text", text=json.dumps(result))]
         
         elif name == "tether_inbox":
             # Get all messages and filter for this agent
@@ -341,8 +354,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )]
         
         elif name == "tether_receive":
-            # Resolve handle and return full message
-            msg = runtime.resolve(arguments["handle"])
+            # Resolve handle — enforce ownership if for_agent is provided
+            msg = runtime.resolve(arguments["handle"], for_agent=arguments.get("for_agent"))
             return [TextContent(
                 type="text",
                 text=json.dumps({

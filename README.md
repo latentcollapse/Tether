@@ -55,21 +55,23 @@ tether_inbox  for_agent="kilo"
 ### 5. Read a message
 
 ```
-tether_receive  handle="h&l_messages_abc123"
+tether_receive  handle="h&l_messages_abc123"  for_agent="kilo"
 → {"handle": "...", "message": {"from": "opus", "to": "kilo", "text": "..."}}
 ```
+
+Access denied if the handle was addressed to a different agent. Omit `for_agent` for unauthenticated reads (backwards compatible).
 
 That's it. No JSON schema knowledge required. No table names. No LC-B awareness. Just send, inbox, receive.
 
 ## MCP Tools
 
-### Messaging (v1.1)
+### Messaging (v1.1+)
 
 | Tool | Description |
 |------|-------------|
-| `tether_send(to, subject, text, from_agent?)` | Send a message — one-liner, no JSON required |
-| `tether_inbox(for_agent)` | Check your mail — returns subjects + previews, sorted by timestamp |
-| `tether_receive(handle)` | Read full message content |
+| `tether_send(to, subject, text, from_agent?, ttl_seconds?)` | Send a message. Optional TTL auto-expires the handle after N seconds. |
+| `tether_inbox(for_agent)` | Check your mail — returns subjects + previews, sorted by timestamp. Expired messages never appear. |
+| `tether_receive(handle, for_agent?)` | Read full message content. Pass `for_agent` to enforce ownership — access denied if the handle belongs to a different agent. |
 
 ### Threads (v1.1)
 
@@ -121,21 +123,31 @@ tether import messages < backup.json
 
 ```python
 from tether import SQLiteRuntime
+from tether.exceptions import E_HANDLE_EXPIRED, E_ACCESS_DENIED
 
 rt = SQLiteRuntime("postoffice.db")
 
-# Write a message
+# Write a message (owned by recipient, expires in 1 hour)
 handle = rt.collapse("messages", {
     "from": "opus",
     "to": "kilo",
     "text": "hey, check the test fixes"
-})
+}, ttl_seconds=3600, owner="kilo")
 print(handle)  # h&l_messages_abc123
 
-# Read it back (from any process sharing the same DB)
-data = rt.resolve(handle)
+# Read it back as the intended recipient
+data = rt.resolve(handle, for_agent="kilo")
 
-# See everything in a table
+# Wrong agent → E_ACCESS_DENIED
+try:
+    rt.resolve(handle, for_agent="claude")
+except E_ACCESS_DENIED:
+    print("not your mail")
+
+# Expired handle → E_HANDLE_EXPIRED
+# (also silently drops from snapshot/inbox)
+
+# See everything in a table (expired handles auto-excluded)
 all_messages = rt.snapshot("messages")
 
 # List tables
@@ -152,23 +164,14 @@ Full transcript: [`demos/first_contact.md`](demos/first_contact.md)
 
 ## Changelog
 
-### v1.2 (Mar 1, 2026)
-- **Breaking:** Handle prefix changed from `&h_` to `h&l_`
-- `h&l` = "h-and-l" = handle. The ampersand was sitting there doing nothing — now it carries meaning. This is a semantic pun baked into the wire format and we're not apologizing for it. Happy Sunday pun-day.
-- **Migration:** `UPDATE kv SET handle = REPLACE(handle, '&h_', 'h&l_') WHERE handle LIKE '&h_%';`
-- **External integrations:** hash portion is unchanged, prefix only. `handle.replace("&h_", "h&l_", 1)` is sufficient.
+Full patch notes for each version live in [`changelog/`](changelog/).
 
-### v1.1 (Feb 28, 2026)
-- **New:** `tether_send`, `tether_inbox`, `tether_receive` — high-level messaging tools, no JSON schema knowledge required
-- **New:** `tether_thread_create`, `tether_thread_send`, `tether_thread_inbox`, `tether_threads` — threaded conversation support
-- **Fix:** LC-B decode resilience — `_decode_resilient()` fallback handles messages written via direct SQLite access (non-standard encodings no longer crash snapshot/resolve)
-- **Fix:** MCP server import path — `sys.path` self-insertion ensures server starts correctly regardless of working directory
-
-### v1.0 (Feb 2026)
-- Initial release: content-addressed collapse/resolve with BLAKE3 + LC-B
-- SQLite persistence, in-memory transport, clipboard transport
-- MCP server, CLI, Python API
-- Notifications convention with read receipts
+| Version | Date | Highlights |
+|---------|------|------------|
+| [v1.3](changelog/v1.3.md) | Mar 2, 2026 | TTL expiry, P.O. Box ownership (`owner=to`), `E_HANDLE_EXPIRED` / `E_ACCESS_DENIED` |
+| [v1.2](changelog/v1.2.md) | Mar 1, 2026 | **Breaking:** handle prefix `&h_` → `h&l_` |
+| [v1.1](changelog/v1.1.md) | Feb 28, 2026 | High-level messaging (`tether_send/inbox/receive`), threads |
+| [v1.0](changelog/v1.0.md) | Feb 2026 | Initial release: collapse/resolve, SQLite, MCP, CLI |
 
 ## Integrations
 

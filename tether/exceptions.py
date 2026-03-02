@@ -59,3 +59,13 @@ class E_CONTRACT_STRUCTURE(TetherError):
 class E_TRANSPORT_ERROR(TetherError):
     """Transport layer error."""
     pass
+
+
+class E_HANDLE_EXPIRED(TetherError):
+    """Handle has passed its TTL."""
+    pass
+
+
+class E_ACCESS_DENIED(TetherError):
+    """Handle is owned by a different agent."""
+    pass

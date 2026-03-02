@@ -3,10 +3,11 @@
 import sqlite3
 import json
 import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from pathlib import Path
 from .lc import encode_lc_b, decode_lc_b
-from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED, E_LC_BINARY_DECODE
+from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED, E_LC_BINARY_DECODE, E_HANDLE_EXPIRED, E_ACCESS_DENIED
 from .runtime import json_to_contract, contract_to_json, CONTRACT_JSON
 
 
@@ -69,11 +70,19 @@ class SQLiteRuntime:
                 table_name TEXT NOT NULL,
                 lc_bytes BLOB NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NULL,
+                owner TEXT NULL,
                 FOREIGN KEY (table_name) REFERENCES tether_tables(table_name)
             )
         """)
+        # Migrate existing DBs that predate these columns
+        for col, defn in [("expires_at", "TIMESTAMP NULL"), ("owner", "TEXT NULL")]:
+            try:
+                self._conn.execute(f"ALTER TABLE tether_handles ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_handles_table 
+            CREATE INDEX IF NOT EXISTS idx_handles_table
             ON tether_handles(table_name)
         """)
         self._conn.commit()
@@ -86,48 +95,69 @@ class SQLiteRuntime:
         except ImportError:
             return hashlib.blake2b(data, digest_size=6).hexdigest()
     
-    def collapse(self, table: str, value: Any) -> str:
+    def collapse(self, table: str, value: Any, ttl_seconds: Optional[int] = None, owner: Optional[str] = None) -> str:
         """
         Collapse a value into a handle in the specified table.
         Persists to SQLite.
+
+        Args:
+            ttl_seconds: If set, handle expires this many seconds from now.
+            owner: If set, only this agent can resolve the handle via tether_receive.
         """
         # Ensure table exists
         self._conn.execute(
             "INSERT OR IGNORE INTO tether_tables (table_name) VALUES (?)",
             (table,)
         )
-        
+
         # Convert to contract and encode
         contract_value = json_to_contract(value)
         lc_bytes = encode_lc_b(contract_value)
         handle_id = self._compute_handle_id(lc_bytes)
         handle = f"h&l_{table}_{handle_id}"
-        
+
+        expires_at = None
+        if ttl_seconds is not None:
+            expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
         # Store in SQLite
         self._conn.execute(
-            "INSERT OR REPLACE INTO tether_handles (handle, table_name, lc_bytes) VALUES (?, ?, ?)",
-            (handle, table, lc_bytes)
+            "INSERT OR REPLACE INTO tether_handles (handle, table_name, lc_bytes, expires_at, owner) VALUES (?, ?, ?, ?, ?)",
+            (handle, table, lc_bytes, expires_at, owner)
         )
         self._conn.commit()
-        
+
         return handle
     
-    def resolve(self, handle: str) -> Any:
-        """Resolve a handle from SQLite."""
+    def resolve(self, handle: str, for_agent: Optional[str] = None) -> Any:
+        """
+        Resolve a handle from SQLite.
+
+        Args:
+            for_agent: If provided and the handle has an owner, access is denied
+                       unless for_agent matches the owner.
+        """
         if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
-        
+
         cursor = self._conn.execute(
-            "SELECT lc_bytes FROM tether_handles WHERE handle = ?",
+            "SELECT lc_bytes, expires_at, owner FROM tether_handles WHERE handle = ?",
             (handle,)
         )
         row = cursor.fetchone()
-        
+
         if not row:
             raise E_HANDLE_UNRESOLVED(f"Handle not found: {handle}")
-        
-        lc_bytes = row["lc_bytes"]
-        return _decode_resilient(lc_bytes)
+
+        if row["expires_at"]:
+            expires = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires:
+                raise E_HANDLE_EXPIRED(f"Handle expired: {handle}")
+
+        if row["owner"] and for_agent and row["owner"] != for_agent:
+            raise E_ACCESS_DENIED(f"Handle belongs to '{row['owner']}', not '{for_agent}'")
+
+        return _decode_resilient(row["lc_bytes"])
     
     def get(self, handle: str, default: Any = None) -> Any:
         """Resolve with default if not found."""
@@ -137,10 +167,11 @@ class SQLiteRuntime:
             return default
     
     def snapshot(self, table: str) -> Dict[str, Any]:
-        """Get all handles and values in a table."""
+        """Get all non-expired handles and values in a table."""
         result = {}
         cursor = self._conn.execute(
-            "SELECT handle, lc_bytes FROM tether_handles WHERE table_name = ?",
+            "SELECT handle, lc_bytes FROM tether_handles WHERE table_name = ? "
+            "AND (expires_at IS NULL OR expires_at > datetime('now'))",
             (table,)
         )
         for row in cursor:
