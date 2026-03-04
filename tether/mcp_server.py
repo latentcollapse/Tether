@@ -31,7 +31,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="tether_collapse",
-            description="Collapse a JSON value into a deterministic handle. Use this to compress data for transfer between LLMs.",
+            description="Collapse a JSON value into a deterministic handle. Use this to compress data for transfer between LLMs. Supports optional tagging.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -42,6 +42,11 @@ async def list_tools() -> list[Tool]:
                     "data": {
                         "type": "object",
                         "description": "JSON data to collapse into a handle"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tags for categorization"
                     }
                 },
                 "required": ["table", "data"]
@@ -63,16 +68,34 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="tether_snapshot",
-            description="Get all handles and values in a table.",
+            description="Get all handles and values in a table. Supports optional tag filtering.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "table": {
                         "type": "string",
                         "description": "Table name to snapshot"
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Optional tag to filter by"
                     }
                 },
                 "required": ["table"]
+            }
+        ),
+        Tool(
+            name="tether_metadata",
+            description="Get metadata for a handle (creation time, tags, owner).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {
+                        "type": "string",
+                        "description": "Handle to inspect"
+                    }
+                },
+                "required": ["handle"]
             }
         ),
         Tool(
@@ -84,63 +107,36 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="tether_export",
-            description="Export a table as transferrable bytes.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "table": {
-                        "type": "string",
-                        "description": "Table name to export"
-                    }
-                },
-                "required": ["table"]
-            }
-        ),
-        Tool(
-            name="tether_import",
-            description="Import a table from exported bytes (for cross-LLM transfer).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "table": {
-                        "type": "string",
-                        "description": "Table name to import into"
-                    },
-                    "data": {
-                        "type": "object",
-                        "description": "Exported table data (handle -> hex bytes)"
-                    }
-                },
-                "required": ["table", "data"]
-            }
-        ),
-        Tool(
             name="tether_send",
-            description="Send a message to another agent. Convenience wrapper that handles message formatting.",
+            description="Send a message to another agent. Automatically adds ISO timestamp.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "to": {
                         "type": "string",
-                        "description": "Recipient agent name (e.g., 'opus', 'kilo', 'claude')"
+                        "description": "Recipient agent name"
                     },
                     "subject": {
                         "type": "string",
-                        "description": "Message subject/topic"
+                        "description": "Message subject"
                     },
                     "text": {
                         "type": "string",
-                        "description": "Message body content"
+                        "description": "Message body"
                     },
                     "from_agent": {
                         "type": "string",
-                        "description": "Sender agent name (defaults to 'kilo')",
+                        "description": "Sender name",
                         "default": "kilo"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tags"
                     },
                     "ttl_seconds": {
                         "type": "integer",
-                        "description": "Optional TTL in seconds. Message expires and becomes unresolvable after this many seconds."
+                        "description": "Optional TTL in seconds. Message expires after this many seconds."
                     }
                 },
                 "required": ["to", "subject", "text"]
@@ -172,10 +168,33 @@ async def list_tools() -> list[Tool]:
                     },
                     "for_agent": {
                         "type": "string",
-                        "description": "Agent reading this message. Required for owner-locked messages — access denied if it doesn't match the recipient."
+                        "description": "Agent reading this message. Required for owner-locked messages."
                     }
                 },
                 "required": ["handle"]
+            }
+        ),
+        Tool(
+            name="tether_export",
+            description="Export a table as transferrable bytes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Table name to export"}
+                },
+                "required": ["table"]
+            }
+        ),
+        Tool(
+            name="tether_import",
+            description="Import a table from exported bytes (for cross-LLM transfer).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Table name to import into"},
+                    "data": {"type": "object", "description": "Exported table data (handle -> hex bytes)"}
+                },
+                "required": ["table", "data"]
             }
         ),
         Tool(
@@ -184,14 +203,8 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "thread_name": {
-                        "type": "string",
-                        "description": "Thread name (e.g., 'hlx-dev', 'tether-dev', 'general')"
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Optional thread description"
-                    }
+                    "thread_name": {"type": "string", "description": "Thread name (e.g., 'hlx-dev', 'general')"},
+                    "description": {"type": "string", "description": "Optional thread description"}
                 },
                 "required": ["thread_name"]
             }
@@ -202,27 +215,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "thread": {
-                        "type": "string",
-                        "description": "Thread name to post to"
-                    },
-                    "to": {
-                        "type": "string",
-                        "description": "Recipient agent name"
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "Message subject"
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Message body"
-                    },
-                    "from_agent": {
-                        "type": "string",
-                        "description": "Sender name (defaults to 'kilo')",
-                        "default": "kilo"
-                    }
+                    "thread": {"type": "string", "description": "Thread name to post to"},
+                    "to": {"type": "string", "description": "Recipient agent name"},
+                    "subject": {"type": "string", "description": "Message subject"},
+                    "text": {"type": "string", "description": "Message body"},
+                    "from_agent": {"type": "string", "description": "Sender name (defaults to 'kilo')", "default": "kilo"}
                 },
                 "required": ["thread", "to", "subject", "text"]
             }
@@ -233,14 +230,8 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "thread": {
-                        "type": "string",
-                        "description": "Thread name to read"
-                    },
-                    "for_agent": {
-                        "type": "string",
-                        "description": "Optional: filter for specific recipient"
-                    }
+                    "thread": {"type": "string", "description": "Thread name to read"},
+                    "for_agent": {"type": "string", "description": "Optional: filter for specific recipient"}
                 },
                 "required": ["thread"]
             }
@@ -248,10 +239,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="tether_threads",
             description="List all conversation threads.",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
+            inputSchema={"type": "object", "properties": {}}
         )
     ]
 
@@ -261,7 +249,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
     try:
         if name == "tether_collapse":
-            handle = runtime.collapse(arguments["table"], arguments["data"])
+            handle = runtime.collapse(
+                arguments["table"], 
+                arguments["data"], 
+                tags=arguments.get("tags")
+            )
             return [TextContent(
                 type="text",
                 text=json.dumps({"handle": handle, "table": arguments["table"]})
@@ -275,10 +267,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )]
         
         elif name == "tether_snapshot":
-            snapshot = runtime.snapshot(arguments["table"])
+            snapshot = runtime.snapshot(arguments["table"], tag=arguments.get("tag"))
             return [TextContent(
                 type="text",
                 text=json.dumps(snapshot, indent=2, default=str)
+            )]
+            
+        elif name == "tether_metadata":
+            meta = runtime.metadata(arguments["handle"])
+            return [TextContent(
+                type="text",
+                text=json.dumps(meta, indent=2)
             )]
         
         elif name == "tether_tables":
@@ -288,24 +287,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 text=json.dumps({"tables": tables})
             )]
         
-        elif name == "tether_export":
-            exported = runtime.export_table(arguments["table"])
-            hex_data = {k: v.hex() for k, v in exported.items()}
-            return [TextContent(
-                type="text",
-                text=json.dumps({"table": arguments["table"], "handles": hex_data})
-            )]
-        
-        elif name == "tether_import":
-            data = {k: bytes.fromhex(v) for k, v in arguments["data"].items()}
-            runtime.import_table(arguments["table"], data)
-            return [TextContent(
-                type="text",
-                text=json.dumps({"status": "imported", "table": arguments["table"], "handles": len(data)})
-            )]
-        
         elif name == "tether_send":
-            # Convenience wrapper: format message and collapse
             message_data = {
                 "from": arguments.get("from_agent", "kilo"),
                 "to": arguments["to"],
@@ -317,72 +299,59 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "messages",
                 message_data,
                 ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
-                owner=arguments["to"],  # P.O. Box: only the recipient can resolve
+                owner=arguments["to"],
+                tags=arguments.get("tags")
             )
-            result = {
-                "handle": handle,
-                "status": "sent",
-                "to": arguments["to"],
-                "subject": arguments["subject"],
-            }
+            result = {"handle": handle, "status": "sent", "to": arguments["to"], "subject": arguments["subject"]}
             if ttl_seconds is not None:
                 result["ttl_seconds"] = int(ttl_seconds)
             return [TextContent(type="text", text=json.dumps(result))]
-        
+
         elif name == "tether_inbox":
-            # Get all messages and filter for this agent
+            for_agent = arguments["for_agent"]
             snapshot = runtime.snapshot("messages")
             inbox = []
             for handle, msg in snapshot.items():
-                if isinstance(msg, dict) and msg.get("to") == arguments["for_agent"]:
+                if isinstance(msg, dict) and msg.get("to") == for_agent:
+                    try:
+                        meta = runtime.metadata(handle, for_agent=for_agent)
+                        read = meta.get("read", False)
+                    except Exception:
+                        read = False
+                    text = msg.get("text", "")
                     inbox.append({
                         "handle": handle,
                         "from": msg.get("from"),
                         "subject": msg.get("subject"),
                         "timestamp": msg.get("timestamp"),
-                        "preview": msg.get("text", "")[:100] + "..." if len(msg.get("text", "")) > 100 else msg.get("text", "")
+                        "preview": text[:100] + "..." if len(text) > 100 else text,
+                        "read": read,
                     })
-            # Sort by timestamp (newest first) if available
-            inbox.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "for_agent": arguments["for_agent"],
-                    "count": len(inbox),
-                    "messages": inbox
-                }, indent=2)
-            )]
-        
+            # Unread first, then newest
+            inbox.sort(key=lambda x: (x["read"], x.get("timestamp", "") or ""), reverse=True)
+            inbox.sort(key=lambda x: x["read"])
+            return [TextContent(type="text", text=json.dumps({"for_agent": for_agent, "count": len(inbox), "messages": inbox}, indent=2))]
+
         elif name == "tether_receive":
-            # Resolve handle — enforce ownership if for_agent is provided
             msg = runtime.resolve(arguments["handle"], for_agent=arguments.get("for_agent"))
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "handle": arguments["handle"],
-                    "message": msg
-                }, indent=2)
-            )]
-        
+            return [TextContent(type="text", text=json.dumps({"handle": arguments["handle"], "message": msg}, indent=2))]
+
+        elif name == "tether_export":
+            exported = runtime.export_table(arguments["table"])
+            hex_data = {k: v.hex() for k, v in exported.items()}
+            return [TextContent(type="text", text=json.dumps({"table": arguments["table"], "handles": hex_data}))]
+
+        elif name == "tether_import":
+            data = {k: bytes.fromhex(v) for k, v in arguments["data"].items()}
+            runtime.import_table(arguments["table"], data)
+            return [TextContent(type="text", text=json.dumps({"status": "imported", "table": arguments["table"], "handles": len(data)}))]
+
         elif name == "tether_thread_create":
-            # Create a thread by storing metadata in threads table
-            thread_data = {
-                "name": arguments["thread_name"],
-                "description": arguments.get("description", ""),
-                "created_at": None,  # Will be set by runtime
-            }
+            thread_data = {"name": arguments["thread_name"], "description": arguments.get("description", "")}
             handle = runtime.collapse("threads", thread_data)
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "status": "created",
-                    "thread": arguments["thread_name"],
-                    "handle": handle
-                })
-            )]
-        
+            return [TextContent(type="text", text=json.dumps({"status": "created", "thread": arguments["thread_name"], "handle": handle}))]
+
         elif name == "tether_thread_send":
-            # Send message to a specific thread
             message_data = {
                 "from": arguments.get("from_agent", "kilo"),
                 "to": arguments["to"],
@@ -391,87 +360,47 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "thread": arguments["thread"],
             }
             handle = runtime.collapse(arguments["thread"], message_data)
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "handle": handle,
-                    "status": "sent",
-                    "thread": arguments["thread"],
-                    "to": arguments["to"],
-                    "subject": arguments["subject"]
-                })
-            )]
-        
+            return [TextContent(type="text", text=json.dumps({"handle": handle, "status": "sent", "thread": arguments["thread"], "to": arguments["to"]}))]
+
         elif name == "tether_thread_inbox":
-            # Get all messages in a thread, optionally filtered by recipient
             snapshot = runtime.snapshot(arguments["thread"])
             messages = []
             for handle, msg in snapshot.items():
                 if isinstance(msg, dict):
-                    # If for_agent specified, filter
                     if arguments.get("for_agent") and msg.get("to") != arguments["for_agent"]:
                         continue
+                    text = msg.get("text", "")
                     messages.append({
                         "handle": handle,
                         "from": msg.get("from"),
                         "to": msg.get("to"),
                         "subject": msg.get("subject"),
                         "timestamp": msg.get("timestamp"),
-                        "preview": msg.get("text", "")[:100] + "..." if len(msg.get("text", "")) > 100 else msg.get("text", "")
+                        "preview": text[:100] + "..." if len(text) > 100 else text,
                     })
-            # Sort by timestamp
-            messages.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "thread": arguments["thread"],
-                    "count": len(messages),
-                    "messages": messages
-                }, indent=2)
-            )]
-        
+            messages.sort(key=lambda x: x.get("timestamp", "") or "", reverse=True)
+            return [TextContent(type="text", text=json.dumps({"thread": arguments["thread"], "count": len(messages), "messages": messages}, indent=2))]
+
         elif name == "tether_threads":
-            # List all threads
             snapshot = runtime.snapshot("threads")
-            threads = []
-            for handle, data in snapshot.items():
-                if isinstance(data, dict):
-                    threads.append({
-                        "handle": handle,
-                        "name": data.get("name"),
-                        "description": data.get("description")
-                    })
-            return [TextContent(
-                type="text",
-                text=json.dumps({
-                    "count": len(threads),
-                    "threads": threads
-                }, indent=2)
-            )]
-        
+            threads = [
+                {"handle": h, "name": d.get("name"), "description": d.get("description")}
+                for h, d in snapshot.items() if isinstance(d, dict)
+            ]
+            return [TextContent(type="text", text=json.dumps({"count": len(threads), "threads": threads}, indent=2))]
+
         else:
             raise ValueError(f"Unknown tool: {name}")
     
     except TetherError as e:
-        return [TextContent(
-            type="text",
-            text=json.dumps({"error": type(e).__name__, "message": str(e)})
-        )]
+        return [TextContent(type="text", text=json.dumps({"error": type(e).__name__, "message": str(e)}))]
     except Exception as e:
-        return [TextContent(
-            type="text",
-            text=json.dumps({"error": "InternalError", "message": str(e)})
-        )]
+        return [TextContent(type="text", text=json.dumps({"error": "InternalError", "message": str(e)}))]
 
 
 async def main():
-    """Run the MCP server."""
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options()
-        )
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 if __name__ == "__main__":
