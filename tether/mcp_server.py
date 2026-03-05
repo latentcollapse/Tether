@@ -18,7 +18,7 @@ import mcp.server
 
 
 # Global runtime instance (SQLite-backed for persistence)
-db_path = os.environ.get("TETHER_DB", "tether.db")
+db_path = os.environ.get("TETHER_DB", "/home/matt/tether.db")
 runtime = SQLiteRuntime(db_path)
 
 
@@ -327,9 +327,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         "preview": text[:100] + "..." if len(text) > 100 else text,
                         "read": read,
                     })
-            # Unread first, then newest
-            inbox.sort(key=lambda x: (x["read"], x.get("timestamp", "") or ""), reverse=True)
-            inbox.sort(key=lambda x: x["read"])
+            # Unread first, then newest (single stable sort)
+            inbox.sort(key=lambda x: (not x["read"], x["timestamp"] or ""), reverse=True)
             return [TextContent(type="text", text=json.dumps({"for_agent": for_agent, "count": len(inbox), "messages": inbox}, indent=2))]
 
         elif name == "tether_receive":
