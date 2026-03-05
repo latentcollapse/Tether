@@ -18,7 +18,10 @@ import mcp.server
 
 
 # Global runtime instance (SQLite-backed for persistence)
-db_path = os.environ.get("TETHER_DB", "/home/matt/tether.db")
+# Resolution order: TETHER_DB env var → XDG_DATA_HOME/tether/tether.db → ~/.local/share/tether/tether.db
+_default_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "tether"
+_default_dir.mkdir(parents=True, exist_ok=True)
+db_path = os.environ.get("TETHER_DB", str(_default_dir / "tether.db"))
 runtime = SQLiteRuntime(db_path)
 
 
