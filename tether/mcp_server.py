@@ -31,6 +31,19 @@ runtime = SQLiteRuntime(db_path)
 server = Server("tether")
 
 
+NOTIFY_FILE = os.path.expanduser("~/.tether_notify")
+
+
+def _write_notify(handle: str, sender: str, subject: str):
+    """Write latest message handle to ~/.tether_notify for shell prompt display.
+    Format: handle | from: subject — resolve directly with tether_receive."""
+    try:
+        with open(NOTIFY_FILE, "w") as f:
+            f.write(f"{handle} | {sender}: {subject}")
+    except Exception:
+        pass
+
+
 def _tmux_inject(session: str, message: str) -> bool:
     """Inject a prompt into a named tmux session. Returns True if session exists."""
     try:
@@ -66,8 +79,12 @@ async def _fire_ping(url: str, payload: dict):
 
     try:
         loop = asyncio.get_running_loop()
+        handle = payload.get("handle", "")
 
-        # 1. tmux injection (preferred)
+        # Always write notify file — shell prompt picks this up on next render
+        await loop.run_in_executor(None, lambda: _write_notify(handle, sender, subject))
+
+        # 1. tmux injection (preferred — fully autonomous)
         injected = await loop.run_in_executor(None, lambda: _tmux_inject(agent, prompt))
 
         # 2. HTTP fallback
