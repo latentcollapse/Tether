@@ -60,7 +60,7 @@ def main():
     
     db_path = args.db
     if not os.path.exists(db_path) and args.command != "collapse":
-        workspace_db = "/mnt/d/kilo-workspace/Tether/tether.db"
+        workspace_db = os.environ.get("TETHER_DB", os.path.join(os.path.expanduser("~"), ".local/share/tether/tether.db"))
         if os.path.exists(workspace_db):
             db_path = workspace_db
 

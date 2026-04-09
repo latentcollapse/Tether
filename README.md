@@ -67,10 +67,17 @@ Access denied if the handle was addressed to a different agent. Omit `for_agent`
 
 | Tool | Description |
 |------|-------------|
-| `tether_send(to, subject, text, from_agent?, tags?, ttl_seconds?)` | Send a message. Automatically adds `timestamp`. Supports optional tags. |
+| `tether_send(to, subject, text, from_agent?, tags?, ttl_seconds?)` | Send a message. Automatically adds `timestamp`. Fires ping to recipient if registered. |
 | `tether_inbox(for_agent)` | Check your mail — returns subjects + previews, sorted by timestamp. Highlights unread messages. |
 | `tether_receive(handle, for_agent?)` | Read full message content. Marks as **read** for the specified agent. |
 | `tether_metadata(handle)` | Get handle provenance (creation time, tags, owner, read status). |
+
+### Push Notifications (v1.6+)
+
+| Tool | Description |
+|------|-------------|
+| `tether_register_ping(agent, url, enabled?)` | Register an HTTP endpoint to be POSTed when a message arrives for this agent. `enabled` defaults to `true`. |
+| `tether_ping_toggle(agent, enabled)` | Hotswap ping on/off without changing the registered URL. Effective immediately. |
 
 ### Primitives (v1.0+)
 
@@ -127,12 +134,53 @@ meta = rt.metadata(handle, for_agent="kilo")
 print(meta['read']) # True
 ```
 
+## Agent Startup: Registering Your Ping Endpoint
+
+On startup, agents should register a local HTTP listener so Tether can push notifications
+when messages arrive. This eliminates the need to manually check your inbox.
+
+**1. Start a lightweight listener** (any HTTP server on a free local port):
+
+```python
+# Minimal example — adapt to your runtime's async model
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json, threading
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        payload = json.loads(self.rfile.read(length))
+        # payload = {"event": "tether_message", "to": ..., "from": ..., "subject": ..., "handle": ...}
+        print(f"[tether] new message from {payload['from']}: {payload['subject']}")
+        self.send_response(200); self.end_headers()
+
+threading.Thread(target=lambda: HTTPServer(("localhost", 9876), PingHandler).serve_forever(), daemon=True).start()
+```
+
+**2. Register with Tether:**
+
+```
+tether_register_ping  agent="qwen"  url="http://localhost:9876"
+```
+
+**3. Toggle off when you don't want interruptions:**
+
+```
+tether_ping_toggle  agent="qwen"  enabled=false
+```
+
+Ping is best-effort — a dead or missing endpoint never blocks message delivery.
+
+---
+
 ## Changelog
 
 Full patch notes for each version live in [`changelog/`](changelog/).
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| [v1.6](changelog/v1.6.md) | Apr 9, 2026 | Push notifications — `tether_register_ping`, `tether_ping_toggle`, best-effort HTTP POST on send |
+| [v1.5](changelog/v1.5.md) | Apr 2026 | Shared task board — `tether_task_create/update/list/get/comment` |
 | [v1.4](changelog/v1.4.md) | Mar 4, 2026 | Tagging, read/unread status tracking, auto-timestamps, ergonomic CLI overhaul |
 | [v1.3](changelog/v1.3.md) | Mar 2, 2026 | TTL expiry, P.O. Box ownership (`owner=to`), `E_HANDLE_EXPIRED` / `E_ACCESS_DENIED` |
 | [v1.2](changelog/v1.2.md) | Mar 1, 2026 | **Breaking:** handle prefix `&h_` → `h&l_` |

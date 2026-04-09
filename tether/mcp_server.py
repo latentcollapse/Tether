@@ -1,8 +1,10 @@
 """Tether MCP Server - Model Context Protocol integration for Tether."""
 
+import asyncio
 import json
 import os
 import sys
+import urllib.request
 from pathlib import Path
 
 # Ensure tether package is importable when run as a script
@@ -26,6 +28,17 @@ runtime = SQLiteRuntime(db_path)
 
 
 server = Server("tether")
+
+
+async def _fire_ping(url: str, payload: dict):
+    """Fire a best-effort HTTP POST ping to an agent's registered endpoint."""
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
+    except Exception:
+        pass  # ping is best-effort — never fail the send
 
 
 @server.list_tools()
@@ -243,7 +256,117 @@ async def list_tools() -> list[Tool]:
             name="tether_threads",
             description="List all conversation threads.",
             inputSchema={"type": "object", "properties": {}}
-        )
+        ),
+
+        # ── Task Board (v1.5) ──────────────────────────────────────────────
+        Tool(
+            name="tether_task_create",
+            description=(
+                "Create a shared task on the persistent task board. "
+                "All agents (Claude, Gemini, Kilo) can read and update tasks. "
+                "Use human-readable IDs like 'hlx-gap1' or 'prism-i64'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Unique task ID (slug, e.g. 'hlx-gap1')"},
+                    "title": {"type": "string", "description": "Short task title"},
+                    "description": {"type": "string", "description": "Full task description"},
+                    "priority": {"type": "string", "description": "p0, p1, p2, or p3", "default": "p1"},
+                    "assignee": {"type": "string", "description": "Agent or person assigned (e.g. 'gemini', 'claude', 'matt')", "default": "unassigned"},
+                    "created_by": {"type": "string", "description": "Who created this task"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags"}
+                },
+                "required": ["id", "title"]
+            }
+        ),
+        Tool(
+            name="tether_task_update",
+            description="Update a task's status, priority, assignee, or description. Any agent can update any task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Task ID to update"},
+                    "status": {"type": "string", "description": "open, in_progress, blocked, done"},
+                    "priority": {"type": "string", "description": "p0, p1, p2, or p3"},
+                    "assignee": {"type": "string", "description": "New assignee"},
+                    "description": {"type": "string", "description": "Updated description"},
+                    "title": {"type": "string", "description": "Updated title"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Updated tags"}
+                },
+                "required": ["id"]
+            }
+        ),
+        Tool(
+            name="tether_task_list",
+            description="List tasks from the shared board. Filter by status, assignee, or priority.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "Filter by status (open, in_progress, blocked, done)"},
+                    "assignee": {"type": "string", "description": "Filter by assignee"},
+                    "priority": {"type": "string", "description": "Filter by priority (p0, p1, p2, p3)"}
+                }
+            }
+        ),
+        Tool(
+            name="tether_task_get",
+            description="Get a single task by ID, including full comment history.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Task ID"}
+                },
+                "required": ["id"]
+            }
+        ),
+        Tool(
+            name="tether_task_comment",
+            description="Append a comment or progress note to a task. Visible to all agents.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Task ID"},
+                    "author": {"type": "string", "description": "Your agent name (e.g. 'claude', 'gemini')"},
+                    "text": {"type": "string", "description": "Comment text"}
+                },
+                "required": ["id", "author", "text"]
+            }
+        ),
+
+        # ── Ping Endpoints (v1.6) ─────────────────────────────────────────
+        Tool(
+            name="tether_register_ping",
+            description=(
+                "Register a ping endpoint so this agent is notified the moment a message arrives. "
+                "On send, Tether fires a lightweight HTTP POST to the URL with event/to/from/subject/handle. "
+                "Set enabled=false to register but keep ping off initially."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "Agent name to register (e.g. 'qwen', 'codex', 'claude')"},
+                    "url": {"type": "string", "description": "HTTP endpoint to POST to when a message arrives"},
+                    "enabled": {"type": "boolean", "description": "Whether to enable pinging immediately (default true)", "default": True}
+                },
+                "required": ["agent", "url"]
+            }
+        ),
+        Tool(
+            name="tether_ping_toggle",
+            description=(
+                "Hotswap ping on or off for an agent without changing the registered URL. "
+                "Takes effect immediately — no server restart needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "Agent name"},
+                    "enabled": {"type": "boolean", "description": "true to enable, false to disable"}
+                },
+                "required": ["agent", "enabled"]
+            }
+        ),
     ]
 
 
@@ -303,11 +426,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 message_data,
                 ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
                 owner=arguments["to"],
-                tags=arguments.get("tags")
+                tags=arguments.get("tags"),
+                sender=arguments.get("from_agent")
             )
             result = {"handle": handle, "status": "sent", "to": arguments["to"], "subject": arguments["subject"]}
             if ttl_seconds is not None:
                 result["ttl_seconds"] = int(ttl_seconds)
+            ping_url = runtime.get_ping_url(arguments["to"])
+            if ping_url:
+                asyncio.create_task(_fire_ping(ping_url, {
+                    "event": "tether_message",
+                    "to": arguments["to"],
+                    "from": arguments.get("from_agent", "unknown"),
+                    "subject": arguments["subject"],
+                    "handle": handle,
+                }))
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "tether_inbox":
@@ -330,13 +463,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         "preview": text[:100] + "..." if len(text) > 100 else text,
                         "read": read,
                     })
-            # Unread first, then newest (single stable sort)
-            inbox.sort(key=lambda x: (not x["read"], x["timestamp"] or ""), reverse=True)
+            # Unread first, then newest — fully defensive against None in any field
+            inbox.sort(key=lambda x: (not bool(x.get("read")), x.get("timestamp") or ""), reverse=True)
             return [TextContent(type="text", text=json.dumps({"for_agent": for_agent, "count": len(inbox), "messages": inbox}, indent=2))]
 
         elif name == "tether_receive":
             msg = runtime.resolve(arguments["handle"], for_agent=arguments.get("for_agent"))
-            return [TextContent(type="text", text=json.dumps({"handle": arguments["handle"], "message": msg}, indent=2))]
+            body = msg.pop("text", "") if isinstance(msg, dict) else ""
+            result = [TextContent(type="text", text=json.dumps({"handle": arguments["handle"], "message": msg}, indent=2))]
+            if body:
+                result.append(TextContent(type="text", text=body))
+            return result
 
         elif name == "tether_export":
             exported = runtime.export_table(arguments["table"])
@@ -390,6 +527,67 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 for h, d in snapshot.items() if isinstance(d, dict)
             ]
             return [TextContent(type="text", text=json.dumps({"count": len(threads), "threads": threads}, indent=2))]
+
+        # ── Task Board (v1.5) ──────────────────────────────────────────────
+        elif name == "tether_task_create":
+            task = runtime.task_create(
+                id=arguments["id"],
+                title=arguments["title"],
+                description=arguments.get("description", ""),
+                priority=arguments.get("priority", "p1"),
+                assignee=arguments.get("assignee", "unassigned"),
+                created_by=arguments.get("created_by", "unknown"),
+                tags=arguments.get("tags"),
+            )
+            return [TextContent(type="text", text=json.dumps({"status": "created", "task": task}, indent=2))]
+
+        elif name == "tether_task_update":
+            task = runtime.task_update(
+                id=arguments["id"],
+                status=arguments.get("status"),
+                priority=arguments.get("priority"),
+                assignee=arguments.get("assignee"),
+                description=arguments.get("description"),
+                title=arguments.get("title"),
+                tags=arguments.get("tags"),
+            )
+            return [TextContent(type="text", text=json.dumps({"status": "updated", "task": task}, indent=2))]
+
+        elif name == "tether_task_list":
+            tasks = runtime.task_list(
+                status=arguments.get("status"),
+                assignee=arguments.get("assignee"),
+                priority=arguments.get("priority"),
+            )
+            return [TextContent(type="text", text=json.dumps({"count": len(tasks), "tasks": tasks}, indent=2))]
+
+        elif name == "tether_task_get":
+            task = runtime.task_get(arguments["id"])
+            return [TextContent(type="text", text=json.dumps(task, indent=2))]
+
+        elif name == "tether_task_comment":
+            task = runtime.task_comment(
+                id=arguments["id"],
+                author=arguments["author"],
+                text=arguments["text"],
+            )
+            return [TextContent(type="text", text=json.dumps({"status": "commented", "task": task}, indent=2))]
+
+        elif name == "tether_register_ping":
+            runtime.set_ping_url(
+                arguments["agent"],
+                arguments["url"],
+                enabled=arguments.get("enabled", True)
+            )
+            status = runtime.get_ping_status(arguments["agent"])
+            return [TextContent(type="text", text=json.dumps({"status": "registered", "ping": status}))]
+
+        elif name == "tether_ping_toggle":
+            runtime.set_ping_enabled(arguments["agent"], arguments["enabled"])
+            status = runtime.get_ping_status(arguments["agent"])
+            if status is None:
+                return [TextContent(type="text", text=json.dumps({"error": "no ping endpoint registered for this agent"}))]
+            return [TextContent(type="text", text=json.dumps({"status": "updated", "ping": status}))]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
