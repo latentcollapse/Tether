@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -30,13 +31,50 @@ runtime = SQLiteRuntime(db_path)
 server = Server("tether")
 
 
-async def _fire_ping(url: str, payload: dict):
-    """Fire a best-effort HTTP POST ping to an agent's registered endpoint."""
+def _tmux_inject(session: str, message: str) -> bool:
+    """Inject a prompt into a named tmux session. Returns True if session exists."""
     try:
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", session],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            return False
+        subprocess.run(
+            ["tmux", "send-keys", "-t", session, message, "Enter"],
+            capture_output=True
+        )
+        return True
+    except FileNotFoundError:
+        return False  # tmux not installed
+
+
+async def _fire_ping(url: str, payload: dict):
+    """Notify an agent of a new message.
+
+    Strategy (in order):
+    1. tmux send-keys into the agent's named session (session name = payload["to"])
+       — activates the agent immediately with no polling
+    2. HTTP POST to registered URL as fallback (for non-tmux setups)
+
+    Both are best-effort — never fail the send.
+    """
+    agent = payload.get("to", "")
+    sender = payload.get("from", "?")
+    subject = payload.get("subject", "?")
+    prompt = f"[tether] new message from {sender}: {subject} — check inbox"
+
+    try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
+
+        # 1. tmux injection (preferred)
+        injected = await loop.run_in_executor(None, lambda: _tmux_inject(agent, prompt))
+
+        # 2. HTTP fallback
+        if not injected and url:
+            data = json.dumps(payload).encode()
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
     except Exception:
         pass  # ping is best-effort — never fail the send
 

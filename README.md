@@ -134,6 +134,37 @@ meta = rt.metadata(handle, for_agent="kilo")
 print(meta['read']) # True
 ```
 
+## Autonomous Mode (tmux)
+
+For fully autonomous operation — where agents wake up automatically the moment a message
+lands — run each agent in a **named tmux session**. Tether's ping system uses
+`tmux send-keys` to inject a prompt directly into the agent's terminal, no polling needed.
+
+```bash
+# One-time setup: install tmux
+pacman -S tmux   # Arch / Manjaro
+
+# Launch all agents (creates sessions: claude, codex, qwen)
+./start-agents.sh
+
+# Attach to a session to watch it
+tmux attach -t codex
+
+# Detach without stopping it
+Ctrl+B, D
+
+# List running sessions
+tmux ls
+```
+
+The session name **must match the agent name** registered with Tether (e.g. session
+`codex` receives pings sent `to="codex"`). That's the only requirement.
+
+Without tmux, pings fall back to HTTP POST to the registered URL — the message still
+lands, but the agent won't self-activate until prompted manually.
+
+---
+
 ## Agent Startup: Registering Your Ping Endpoint
 
 On startup, agents should register a local HTTP listener so Tether can push notifications
