@@ -208,10 +208,75 @@ class TetherHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             _json_response(self, {"error": "internal", "message": str(e)}, 500)
 
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        rt = get_runtime()
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            data = json.loads(body)
+        except Exception as e:
+            _json_response(self, {"error": "bad_request", "message": str(e)}, 400)
+            return
+
+        try:
+            if path == "/send":
+                required = {"from_agent", "to", "subject", "text"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                message_data = {
+                    "from": data["from_agent"],
+                    "to": data["to"],
+                    "subject": data["subject"],
+                    "text": data["text"],
+                }
+                handle = rt.collapse(
+                    "messages",
+                    message_data,
+                    owner=data["to"],
+                    sender=data["from_agent"],
+                    tags=data.get("tags"),
+                )
+                _json_response(self, {
+                    "handle": handle,
+                    "status": "sent",
+                    "from": data["from_agent"],
+                    "to": data["to"],
+                    "subject": data["subject"],
+                })
+
+            elif path == "/thread/reply":
+                required = {"thread", "from_agent", "text"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                message_data = {
+                    "from": data["from_agent"],
+                    "text": data["text"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                handle = rt.collapse(
+                    data["thread"],
+                    message_data,
+                    sender=data["from_agent"],
+                )
+                _json_response(self, {"handle": handle, "status": "sent", "thread": data["thread"]})
+
+            else:
+                _json_response(self, {"error": "not found", "path": path}, 404)
+
+        except Exception as e:
+            _json_response(self, {"error": "internal", "message": str(e)}, 500)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
