@@ -2,11 +2,23 @@
 
 import json
 import hashlib
-from typing import Any, Dict, Optional, Union
+from pathlib import Path
+from typing import Any, Dict
 from .lc import encode_lc_b, decode_lc_b
 from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED
+from .handles import (
+    BLOB_PREFIX,
+    INLINE_PREFIX,
+    LEGACY_MESSAGES_PREFIX,
+    TREE_PREFIX,
+    canonical_json,
+    digest12,
+    kvfold_dir,
+    suffix,
+)
 
 CONTRACT_JSON = 99
+_MISSING = object()
 
 
 def json_to_contract(value: Any) -> Any:
@@ -63,6 +75,8 @@ class Runtime:
     def __init__(self):
         self._tables: Dict[str, Dict[str, bytes]] = {}
         self._content_table: Dict[str, Any] = {}
+        self._inline_table: Dict[str, Any] = {}
+        self._kvfold_dir = kvfold_dir(Path("kvfold"))
     
     def _compute_handle_id(self, data: bytes) -> str:
         """Compute deterministic handle ID from content."""
@@ -73,7 +87,7 @@ class Runtime:
             import hashlib
             return hashlib.blake2b(data, digest_size=6).hexdigest()
     
-    def collapse(self, table: str, value: Any) -> str:
+    def collapse(self, table: str | Any, value: Any = _MISSING) -> str:
         """
         Collapse a value into a handle in the specified table.
         
@@ -84,6 +98,10 @@ class Runtime:
         Returns:
             Handle string in format &h_<table>_<id>
         """
+        if value is _MISSING:
+            return self.collapse_inline(table)
+
+        table = str(table)
         if table not in self._tables:
             self._tables[table] = {}
         
@@ -95,6 +113,32 @@ class Runtime:
         self._tables[table][handle] = lc_bytes
         self._content_table[handle] = value
         
+        return handle
+
+    def collapse_inline(self, value: str | dict[str, Any]) -> str:
+        """Collapse a small JSON-serializable value into an inline handle."""
+        data = canonical_json(value)
+        handle = f"{INLINE_PREFIX}{digest12(data)}"
+        self._inline_table[handle] = value
+        return handle
+
+    def collapse_blob(self, data: bytes, content_type: str) -> str:
+        """Collapse binary data into KVFold and return a blob handle."""
+        digest = digest12(data)
+        handle = f"{BLOB_PREFIX}{digest}"
+        (self._kvfold_dir / digest).write_bytes(data)
+        (self._kvfold_dir / f"{digest}.toml").write_text(
+            f"handle = {json.dumps(handle)}\ncontent_type = {json.dumps(content_type)}\n",
+            encoding="utf-8",
+        )
+        return handle
+
+    def collapse_tree(self, handles: list[str]) -> str:
+        """Collapse an ordered list of handles into KVFold and return a tree handle."""
+        data = canonical_json(handles)
+        digest = digest12(data)
+        handle = f"{TREE_PREFIX}{digest}"
+        (self._kvfold_dir / digest).write_bytes(data)
         return handle
     
     def resolve(self, handle: str) -> Any:
@@ -112,6 +156,29 @@ class Runtime:
         """
         if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
+
+        if handle.startswith(INLINE_PREFIX):
+            try:
+                return self._inline_table[handle]
+            except KeyError as exc:
+                raise E_HANDLE_UNRESOLVED(f"Handle not found: {handle}") from exc
+
+        if handle.startswith(BLOB_PREFIX):
+            return (self._kvfold_dir / suffix(handle, BLOB_PREFIX)).read_bytes()
+
+        if handle.startswith(TREE_PREFIX):
+            raw = (self._kvfold_dir / suffix(handle, TREE_PREFIX)).read_bytes()
+            children = json.loads(raw.decode("utf-8"))
+            if not isinstance(children, list):
+                raise ValueError(f"tree handle does not contain a list: {handle}")
+            return [self.resolve(str(child)) for child in children]
+
+        if (
+            not handle.startswith(LEGACY_MESSAGES_PREFIX)
+            and handle not in self._content_table
+            and not any(handle in table_data for table_data in self._tables.values())
+        ):
+            raise ValueError(f"unknown handle prefix: {handle}")
         
         if handle in self._content_table:
             return self._content_table[handle]
