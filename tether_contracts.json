@@ -7,6 +7,12 @@
     "semantic_interpretation": "EXTERNAL",
     "execution": "OUT_OF_SCOPE"
   },
+  "handle_types": {
+    "inline": "h&l_inline_{hash12}",
+    "blob": "h&l_blob_{hash12}",
+    "tree": "h&l_tree_{hash12}",
+    "legacy": "h&l_messages_{hash12}"
+  },
   "primitive_contracts": {
     "0": {
       "name": "NULL",

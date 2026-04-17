@@ -9,6 +9,18 @@ from pathlib import Path
 from .lc import encode_lc_b, decode_lc_b
 from .exceptions import E_HANDLE_INVALID, E_HANDLE_UNRESOLVED, E_LC_BINARY_DECODE, E_HANDLE_EXPIRED, E_ACCESS_DENIED
 from .runtime import json_to_contract, contract_to_json, CONTRACT_JSON
+from .handles import (
+    BLOB_PREFIX,
+    INLINE_PREFIX,
+    LEGACY_MESSAGES_PREFIX,
+    TREE_PREFIX,
+    canonical_json,
+    digest12,
+    kvfold_dir,
+    suffix,
+)
+
+_MISSING = object()
 
 
 def _decode_resilient(lc_bytes: bytes) -> Any:
@@ -31,6 +43,7 @@ class SQLiteRuntime:
     
     def __init__(self, db_path: str = "tether.db"):
         self.db_path = db_path
+        self._kvfold_dir = kvfold_dir(Path("kvfold"))
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_db()
@@ -124,10 +137,14 @@ class SQLiteRuntime:
         except ImportError:
             return hashlib.blake2b(data, digest_size=6).hexdigest()
     
-    def collapse(self, table: str, value: Any, ttl_seconds: Optional[int] = None,
+    def collapse(self, table: str | Any, value: Any = _MISSING, ttl_seconds: Optional[int] = None,
                  owner: Optional[str] = None, tags: Optional[List[str]] = None,
                  sender: Optional[str] = None) -> str:
         """Collapse a value into a handle."""
+        if value is _MISSING:
+            return self.collapse_inline(table)
+
+        table = str(table)
         self._conn.execute("INSERT OR IGNORE INTO tether_tables (table_name) VALUES (?)", (table,))
 
         if isinstance(value, dict) and "timestamp" not in value:
@@ -152,11 +169,67 @@ class SQLiteRuntime:
         )
         self._conn.commit()
         return handle
+
+    def collapse_inline(self, value: str | dict[str, Any]) -> str:
+        """Collapse a small JSON-serializable value into an inline handle."""
+        lc_bytes = canonical_json(value)
+        handle = f"{INLINE_PREFIX}{digest12(lc_bytes)}"
+        self._conn.execute("INSERT OR IGNORE INTO tether_tables (table_name) VALUES ('inline')")
+        self._conn.execute(
+            "INSERT OR REPLACE INTO tether_handles (handle, table_name, lc_bytes) VALUES (?, 'inline', ?)",
+            (handle, lc_bytes),
+        )
+        self._conn.commit()
+        return handle
+
+    def collapse_blob(self, data: bytes, content_type: str) -> str:
+        """Collapse binary data into KVFold and return a blob handle."""
+        digest = digest12(data)
+        handle = f"{BLOB_PREFIX}{digest}"
+        (self._kvfold_dir / digest).write_bytes(data)
+        (self._kvfold_dir / f"{digest}.toml").write_text(
+            f"handle = {json.dumps(handle)}\ncontent_type = {json.dumps(content_type)}\n",
+            encoding="utf-8",
+        )
+        return handle
+
+    def collapse_tree(self, handles: List[str]) -> str:
+        """Collapse an ordered list of handles into KVFold and return a tree handle."""
+        data = canonical_json(handles)
+        digest = digest12(data)
+        handle = f"{TREE_PREFIX}{digest}"
+        (self._kvfold_dir / digest).write_bytes(data)
+        return handle
     
     def resolve(self, handle: str, for_agent: Optional[str] = None) -> Any:
         """Resolve a handle. Automatically marks as read if for_agent is provided."""
         if not handle.startswith("h&l_"):
             raise E_HANDLE_INVALID(f"Invalid handle format: {handle}")
+
+        if handle.startswith(INLINE_PREFIX):
+            cursor = self._conn.execute(
+                "SELECT lc_bytes FROM tether_handles WHERE handle = ? AND table_name = 'inline'",
+                (handle,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise E_HANDLE_UNRESOLVED(f"Handle not found: {handle}")
+            return json.loads(bytes(row["lc_bytes"]).decode("utf-8"))
+
+        if handle.startswith(BLOB_PREFIX):
+            return (self._kvfold_dir / suffix(handle, BLOB_PREFIX)).read_bytes()
+
+        if handle.startswith(TREE_PREFIX):
+            raw = (self._kvfold_dir / suffix(handle, TREE_PREFIX)).read_bytes()
+            handles = json.loads(raw.decode("utf-8"))
+            if not isinstance(handles, list):
+                raise ValueError(f"tree handle does not contain a list: {handle}")
+            return [self.resolve(str(child)) for child in handles]
+
+        if not handle.startswith(LEGACY_MESSAGES_PREFIX):
+            cursor = self._conn.execute("SELECT 1 FROM tether_handles WHERE handle = ?", (handle,))
+            if cursor.fetchone() is None:
+                raise ValueError(f"unknown handle prefix: {handle}")
 
         cursor = self._conn.execute(
             "SELECT lc_bytes, expires_at, owner, sender FROM tether_handles WHERE handle = ?",

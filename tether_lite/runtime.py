@@ -12,6 +12,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from tether.handles import (
+    BLOB_PREFIX,
+    INLINE_PREFIX,
+    LEGACY_MESSAGES_PREFIX,
+    TREE_PREFIX,
+    canonical_json,
+    digest12,
+    kvfold_dir,
+    suffix,
+)
+
 logger = logging.getLogger(__name__)
 
 OPEN = "open"
@@ -46,7 +57,61 @@ class TetherLiteRuntime:
         self.root = Path(root or env_root or Path(__file__).resolve().parent)
         self.messages_dir = self.root / "messages"
         self.messages_dir.mkdir(parents=True, exist_ok=True)
+        self.kvfold_dir = kvfold_dir(self.root / "kvfold")
         self.stale_hours = stale_hours if stale_hours is not None else self._env_stale_hours()
+
+    def collapse(self, value: str | dict[str, Any]) -> str:
+        """Collapse a small JSON-serializable value into an inline handle."""
+        data = canonical_json(value)
+        handle = f"{INLINE_PREFIX}{digest12(data)}"
+        self._inline_path(handle).write_text(
+            "\n".join(
+                [
+                    f"handle = {json.dumps(handle)}",
+                    f"value_json = {json.dumps(data.decode('utf-8'))}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return handle
+
+    def collapse_blob(self, data: bytes, content_type: str) -> str:
+        """Collapse binary data into KVFold and return a blob handle."""
+        digest = digest12(data)
+        handle = f"{BLOB_PREFIX}{digest}"
+        self._kvfold_path(digest).write_bytes(data)
+        self._kvfold_path(f"{digest}.toml").write_text(
+            f"handle = {json.dumps(handle)}\ncontent_type = {json.dumps(content_type)}\n",
+            encoding="utf-8",
+        )
+        return handle
+
+    def collapse_tree(self, handles: list[str]) -> str:
+        """Collapse an ordered list of handles into KVFold and return a tree handle."""
+        data = canonical_json(handles)
+        digest = digest12(data)
+        handle = f"{TREE_PREFIX}{digest}"
+        self._kvfold_path(digest).write_bytes(data)
+        return handle
+
+    def resolve(self, handle: str) -> str | bytes | list[Any] | dict[str, Any]:
+        """Resolve typed inline/blob/tree handles by prefix."""
+        if handle.startswith(INLINE_PREFIX):
+            with self._inline_path(handle).open("rb") as fh:
+                data = tomllib.load(fh)
+            return json.loads(str(data["value_json"]))
+        if handle.startswith(BLOB_PREFIX):
+            return self._kvfold_path(suffix(handle, BLOB_PREFIX)).read_bytes()
+        if handle.startswith(TREE_PREFIX):
+            raw = self._kvfold_path(suffix(handle, TREE_PREFIX)).read_bytes()
+            handles = json.loads(raw.decode("utf-8"))
+            if not isinstance(handles, list):
+                raise ValueError(f"tree handle does not contain a list: {handle}")
+            return [self.resolve(str(child)) for child in handles]
+        if handle.startswith(LEGACY_MESSAGES_PREFIX):
+            return self.receive(handle)
+        raise ValueError(f"unknown handle prefix: {handle}")
 
     def inbox(self, agent_name: str) -> list[dict[str, Any]]:
         """List open messages addressed to agent_name, marking old opens stale first."""
@@ -141,9 +206,17 @@ class TetherLiteRuntime:
             raise ValueError(f"invalid handle path component: {handle}")
         return self.messages_dir / f"{clean}.toml"
 
+    def _inline_path(self, handle: str) -> Path:
+        return self._message_path(handle)
+
+    def _kvfold_path(self, name: str) -> Path:
+        if "/" in name or "\\" in name:
+            raise ValueError(f"invalid KVFold path component: {name}")
+        return self.kvfold_dir / name
+
     def _iter_messages(self) -> list[_MessageRecord]:
         records: list[_MessageRecord] = []
-        for path in sorted(self.messages_dir.glob("*.toml")):
+        for path in sorted(self.messages_dir.glob(f"{LEGACY_MESSAGES_PREFIX}*.toml")):
             try:
                 records.append(self._read_path(path))
             except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError, ValueError) as exc:
