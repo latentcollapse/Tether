@@ -1,7 +1,7 @@
 import asyncio
 import json
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
@@ -23,10 +23,12 @@ def relay_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Relay
     monkeypatch.setenv("TETHER_RELAY_DB", str(db_path))
     monkeypatch.setenv("TETHER_RELAY_KEY_PREFIX", "tk_test_")
     monkeypatch.setenv("TETHER_RELAY_BCRYPT_ROUNDS", "4")
+    relay_auth.reset_rate_limits()
     db = RelayDB(str(db_path))
     relay_auth.set_db(db)
     yield db
     relay_auth.set_db(None)
+    relay_auth.reset_rate_limits()
     db.close()
 
 

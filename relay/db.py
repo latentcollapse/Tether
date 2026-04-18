@@ -24,6 +24,7 @@ class RelayDB:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._lock = threading.RLock()
         self.init_schema()
 
@@ -53,6 +54,14 @@ class RelayDB:
                     queued_at TEXT NOT NULL,
                     delivered_at TEXT,
                     status TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS keys (
+                    key_id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    key_hash TEXT NOT NULL,
+                    label TEXT,
+                    created_at TEXT NOT NULL,
+                    revoked_at TEXT
                 );
                 """
             )
@@ -91,6 +100,20 @@ class RelayDB:
             rows = self._conn.execute("SELECT * FROM agents").fetchall()
         return [dict(row) for row in rows]
 
+    def get_active_key_hashes(self) -> list[dict[str, Any]]:
+        """Return active managed key hashes with agent metadata."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT keys.key_id, keys.agent_id, keys.key_hash, agents.name
+                FROM keys
+                JOIN agents ON agents.agent_id = keys.agent_id
+                WHERE keys.revoked_at IS NULL
+                ORDER BY keys.created_at, keys.key_id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_agents(self) -> list[dict[str, Any]]:
         """List registered agents."""
         with self._lock:
@@ -103,8 +126,90 @@ class RelayDB:
         """Delete an agent and queued handles addressed to it."""
         with self._lock:
             self._conn.execute("DELETE FROM queued_handles WHERE to_agent = ? OR from_agent = ?", (agent_id, agent_id))
+            self._conn.execute("DELETE FROM keys WHERE agent_id = ?", (agent_id,))
             self._conn.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
             self._conn.commit()
+
+    def create_key(self, agent_id: str, label: str | None, key_hash: str) -> dict[str, Any]:
+        """Create a managed API key row."""
+        key_id = str(uuid.uuid4())
+        created_at = utc_now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO keys (key_id, agent_id, key_hash, label, created_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, NULL)
+                """,
+                (key_id, agent_id, key_hash, label, created_at),
+            )
+            self._conn.commit()
+        return {
+            "key_id": key_id,
+            "agent_id": agent_id,
+            "label": label,
+            "created_at": created_at,
+            "revoked_at": None,
+        }
+
+    def get_key(self, key_id: str) -> dict[str, Any] | None:
+        """Fetch a managed API key row."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM keys WHERE key_id = ?", (key_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_keys_for_agent(self, agent_id: str) -> list[dict[str, Any]]:
+        """List managed API keys for an agent."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT key_id, agent_id, label, created_at, revoked_at
+                FROM keys
+                WHERE agent_id = ?
+                ORDER BY created_at, key_id
+                """,
+                (agent_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def revoke_key(self, key_id: str) -> None:
+        """Revoke a managed API key."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE keys SET revoked_at = COALESCE(revoked_at, ?) WHERE key_id = ?",
+                (utc_now(), key_id),
+            )
+            self._conn.commit()
+
+    def rotate_key(self, key_id: str, new_key_hash: str) -> dict[str, Any] | None:
+        """Atomically revoke an existing key and create its replacement."""
+        new_key_id = str(uuid.uuid4())
+        now = utc_now()
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                old = self._conn.execute("SELECT * FROM keys WHERE key_id = ?", (key_id,)).fetchone()
+                if old is None or old["revoked_at"] is not None:
+                    self._conn.rollback()
+                    return None
+                self._conn.execute("UPDATE keys SET revoked_at = ? WHERE key_id = ?", (now, key_id))
+                self._conn.execute(
+                    """
+                    INSERT INTO keys (key_id, agent_id, key_hash, label, created_at, revoked_at)
+                    VALUES (?, ?, ?, ?, ?, NULL)
+                    """,
+                    (new_key_id, old["agent_id"], new_key_hash, old["label"], now),
+                )
+                self._conn.commit()
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        return {
+            "key_id": new_key_id,
+            "agent_id": old["agent_id"],
+            "label": old["label"],
+            "created_at": now,
+            "revoked_at": None,
+        }
 
     def set_online(self, agent_id: str, online: bool) -> None:
         """Update online status and last_seen."""
