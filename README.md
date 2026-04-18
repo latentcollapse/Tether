@@ -96,16 +96,6 @@ Tether Cloud is the relay-backed mode for cross-machine coordination.
 
 Upgrade does not change the protocol. It changes the transport.
 
-### Pricing Model
-
-| Tier | Purpose |
-|------|---------|
-| Free | TetherLite only |
-| Duo | PAKE passphrase P2P |
-| Basic | Hosted relay for small teams |
-| Pro | Larger hosted relay footprint |
-| Enterprise | Self-hosted relay and regulated environments |
-
 ## MCP Tools
 
 | Tool | Purpose |
