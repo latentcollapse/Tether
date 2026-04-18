@@ -33,9 +33,11 @@ IDLE_PATTERNS = [
     re.compile(r'>\s*$'),                    # Qwen Code / Gemini idle prompt
     re.compile(r'\u276f\s*$'),              # Claude Code ❯ prompt
     re.compile(r'\u25c7\s*$'),              # Codex CLI ◇ idle prompt
+    re.compile(r'\u203a\s*$'),              # Codex CLI › input prompt
     re.compile(r'Waiting for your input'),   # Claude Code idle text
     re.compile(r'^\?\s*$'),                  # Claude Code ? prompt
     re.compile(r'Ready'),                    # Codex CLI "◇  Ready" state
+    re.compile(r'gpt-'),                     # Codex CLI status line
 ]
 
 IDLE_POLL_INTERVAL = 2   # seconds
@@ -96,7 +98,10 @@ def pane_is_idle(pane: str) -> bool:
             for pat in IDLE_PATTERNS:
                 if pat.search(stripped):
                     return True
-        # NOTE: do NOT treat a blank last line as idle — that fires mid-typing.
+        # Blank last line = cursor on empty input line = idle for terminal agents.
+        # Safe here because Claude uses desktop notify and never reaches this path.
+        if not lines[-1].strip():
+            return True
         return False
     except Exception:
         return False

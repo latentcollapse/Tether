@@ -117,6 +117,25 @@ opened = "2026-04-17"
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[ticket]]
+id = "T-056"
+title = "Autoping — Diagnose tmux injection failure + robustness overhaul"
+status = "open"
+tier = "red"
+area = ["infra", "ping", "autonomous"]
+assignee = "codex"
+opened = "2026-04-18"
+# tmux injection not waking Codex/Gemini after daemon rewrites tonight.
+# Claude desktop notify path works. Buffer files written. Injection silent.
+# Codex pane %9, Gemini pane %7. Enable flags present.
+# Fix + harden:
+#   - Diagnose why send-keys isn't waking the agent (idle detection? wrong pane? C-m?)
+#   - GET /health — agent, pane, enabled, last_ping_at, last_inject_success
+#   - POST /test-inject — fire test notification, return inject result
+#   - Startup pane validation with clear warning if pane not found
+#   - scripts/test_autoping.sh — smoke test: send ping, verify buffer within 3s
+#   - Wake time target: < 5s when agent is idle (currently up to 30s IDLE_MAX_WAIT)
+
+[[ticket]]
 id = "T-055"
 title = "OpenClaw Tether Skill — Native HTTP Notify Endpoint"
 status = "open"
