@@ -38,7 +38,8 @@ class RelayDB:
                     name TEXT NOT NULL,
                     description TEXT,
                     api_key_hash TEXT NOT NULL,
-                    tier TEXT NOT NULL DEFAULT 'free',
+                    pubkey TEXT,
+                    tier TEXT NOT NULL DEFAULT 'teams',
                     created_at TEXT NOT NULL,
                     last_seen TEXT,
                     online INTEGER NOT NULL DEFAULT 0
@@ -65,6 +66,14 @@ class RelayDB:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(agents)").fetchall()
+            }
+            if "tier" not in columns:
+                self._conn.execute("ALTER TABLE agents ADD COLUMN tier TEXT NOT NULL DEFAULT 'teams'")
+            if "pubkey" not in columns:
+                self._conn.execute("ALTER TABLE agents ADD COLUMN pubkey TEXT")
             self._conn.commit()
 
     def close(self) -> None:
@@ -72,7 +81,13 @@ class RelayDB:
         with self._lock:
             self._conn.close()
 
-    def create_agent(self, name: str, description: str | None, api_key_hash: str) -> dict[str, Any]:
+    def create_agent(
+        self,
+        name: str,
+        description: str | None,
+        api_key_hash: str,
+        pubkey: str | None = None,
+    ) -> dict[str, Any]:
         """Create an agent registry row."""
         agent_id = f"agent_{uuid.uuid4().hex}"
         now = utc_now()
@@ -80,13 +95,19 @@ class RelayDB:
             self._conn.execute(
                 """
                 INSERT INTO agents
-                (agent_id, name, description, api_key_hash, tier, created_at, last_seen, online)
-                VALUES (?, ?, ?, ?, 'free', ?, ?, 0)
+                (agent_id, name, description, api_key_hash, pubkey, tier, created_at, last_seen, online)
+                VALUES (?, ?, ?, ?, ?, 'teams', ?, ?, 0)
                 """,
-                (agent_id, name, description, api_key_hash, now, now),
+                (agent_id, name, description, api_key_hash, pubkey, now, now),
             )
             self._conn.commit()
-        return {"agent_id": agent_id, "name": name, "description": description}
+        return {
+            "agent_id": agent_id,
+            "name": name,
+            "description": description,
+            "pubkey": pubkey,
+            "tier": "teams",
+        }
 
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         """Fetch an agent by id."""
@@ -118,9 +139,35 @@ class RelayDB:
         """List registered agents."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT agent_id, name, online, last_seen FROM agents ORDER BY name, agent_id"
+                "SELECT agent_id, name, online, last_seen, tier FROM agents ORDER BY name, agent_id"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_agents(self) -> int:
+        """Return the number of registered relay agents."""
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) AS count FROM agents").fetchone()
+        return int(row["count"])
+
+    def set_agent_tier(self, agent_id: str, tier: str) -> None:
+        """Set an agent's subscription tier."""
+        with self._lock:
+            self._conn.execute("UPDATE agents SET tier = ? WHERE agent_id = ?", (tier, agent_id))
+            self._conn.commit()
+
+    def get_agent_tier(self, agent_id: str) -> str | None:
+        """Return an agent's subscription tier."""
+        with self._lock:
+            row = self._conn.execute("SELECT tier FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        return str(row["tier"]) if row else None
+
+    def get_agent_pubkey(self, agent_id: str) -> str | None:
+        """Return an agent's registered public key."""
+        with self._lock:
+            row = self._conn.execute("SELECT pubkey FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        if row is None or row["pubkey"] is None:
+            return None
+        return str(row["pubkey"])
 
     def delete_agent(self, agent_id: str) -> None:
         """Delete an agent and queued handles addressed to it."""

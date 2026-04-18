@@ -10,6 +10,7 @@ import pytest
 from relay import auth as relay_auth
 from relay.db import RelayDB
 from relay.main import app
+from relay.tier import reset_daily_message_counts
 
 
 @pytest.fixture()
@@ -24,11 +25,13 @@ def relay_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Relay
     monkeypatch.setenv("TETHER_RELAY_KEY_PREFIX", "tk_test_")
     monkeypatch.setenv("TETHER_RELAY_BCRYPT_ROUNDS", "4")
     relay_auth.reset_rate_limits()
+    reset_daily_message_counts()
     db = RelayDB(str(db_path))
     relay_auth.set_db(db)
     yield db
     relay_auth.set_db(None)
     relay_auth.reset_rate_limits()
+    reset_daily_message_counts()
     db.close()
 
 
@@ -101,6 +104,7 @@ async def test_agent_register_list_and_delete(relay_env: RelayDB) -> None:
                 "name": "codex",
                 "online": False,
                 "last_seen": listed.json()[0]["last_seen"],
+                "tier": "teams",
             }
         ]
 
