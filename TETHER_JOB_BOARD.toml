@@ -117,6 +117,26 @@ opened = "2026-04-17"
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[ticket]]
+id = "T-057"
+title = "Ping Daemon Robustness — systemd services + dynamic pane discovery"
+status = "open"
+tier = "red"
+area = ["infra", "ping", "autonomous"]
+assignee = "codex"
+opened = "2026-04-18"
+depends_on = ["T-056"]
+# Two root causes of fragility:
+#   1. Daemons die and nothing restarts them
+#   2. tmux pane IDs drift — hardcoded %9/%7 go stale
+# Fix:
+#   - systemd user service files (one per agent, Restart=always, survives reboot)
+#   - scripts/install_services.sh + uninstall_services.sh
+#   - Remove --pane arg entirely — dynamic pane discovery on every ping
+#   - Fallback chain: tmux fail → desktop notify → ~/.tether_notify (never drop silently)
+#   - Startup pane scan with warning if not found
+# After this: `bash scripts/install_services.sh` is the one-time setup. Done forever.
+
+[[ticket]]
 id = "T-056"
 title = "Autoping — Diagnose tmux injection failure + robustness overhaul"
 status = "open"
