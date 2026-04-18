@@ -202,3 +202,16 @@ async def test_websocket_flushes_offline_queue_on_reconnect(relay_env: RelayDB) 
 
         status = await client.get("/v1/handles/h&l_tree_waiting/status", headers=auth(sender["api_key"]))
         assert status.json() == {"handle": "h&l_tree_waiting", "status": "delivered"}
+
+
+@pytest.mark.anyio
+async def test_health_reports_relay_mode(relay_env: RelayDB) -> None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["mode"] == "relay"
+        assert payload["agents"] == 0
+        assert isinstance(payload["dashboard"], bool)

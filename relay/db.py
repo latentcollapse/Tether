@@ -64,6 +64,26 @@ class RelayDB:
                     created_at TEXT NOT NULL,
                     revoked_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS blind_blobs (
+                    handle TEXT PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    payload BLOB NOT NULL,
+                    uploaded_by TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS customers (
+                    id TEXT PRIMARY KEY,
+                    stripe_customer_id TEXT UNIQUE,
+                    email TEXT NOT NULL,
+                    tier TEXT NOT NULL DEFAULT 'free',
+                    api_key_hash TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS billing_events (
+                    event_id TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -74,6 +94,12 @@ class RelayDB:
                 self._conn.execute("ALTER TABLE agents ADD COLUMN tier TEXT NOT NULL DEFAULT 'teams'")
             if "pubkey" not in columns:
                 self._conn.execute("ALTER TABLE agents ADD COLUMN pubkey TEXT")
+            customer_columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(customers)").fetchall()
+            }
+            if customer_columns and "api_key_hash" not in customer_columns:
+                self._conn.execute("ALTER TABLE customers ADD COLUMN api_key_hash TEXT")
             self._conn.commit()
 
     def close(self) -> None:
@@ -298,6 +324,152 @@ class RelayDB:
             self._conn.execute(
                 "UPDATE queued_handles SET status = 'delivered', delivered_at = ? WHERE id = ?",
                 (utc_now(), row_id),
+            )
+            self._conn.commit()
+
+    def store_blind_blob(
+        self,
+        handle: str,
+        content_type: str,
+        payload: bytes,
+        uploaded_by: str,
+    ) -> bool:
+        """Store relay-blind ciphertext under a deterministic handle."""
+        now = utc_now()
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT content_type, payload FROM blind_blobs WHERE handle = ?",
+                (handle,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["content_type"]) != content_type or bytes(existing["payload"]) != payload:
+                    raise ValueError("handle already exists with different payload")
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO blind_blobs (handle, content_type, payload, uploaded_by, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (handle, content_type, payload, uploaded_by, now),
+            )
+            self._conn.commit()
+        return True
+
+    def get_blind_blob(self, handle: str) -> dict[str, Any] | None:
+        """Return relay-blind blob metadata and payload."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM blind_blobs WHERE handle = ?", (handle,)).fetchone()
+        return dict(row) if row else None
+
+    def agent_can_access_blob(self, agent_id: str, handle: str) -> bool:
+        """Return whether an agent can fetch a relay-stored ciphertext blob."""
+        with self._lock:
+            blob = self._conn.execute(
+                "SELECT uploaded_by FROM blind_blobs WHERE handle = ?",
+                (handle,),
+            ).fetchone()
+            if blob is None:
+                return False
+            if str(blob["uploaded_by"]) == agent_id:
+                return True
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM queued_handles
+                WHERE handle = ? AND (from_agent = ? OR to_agent = ?)
+                LIMIT 1
+                """,
+                (handle, agent_id, agent_id),
+            ).fetchone()
+        return row is not None
+
+    def get_customer_by_stripe_customer_id(self, stripe_customer_id: str) -> dict[str, Any] | None:
+        """Return a customer row by Stripe customer id."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM customers WHERE stripe_customer_id = ?",
+                (stripe_customer_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_customer_by_email(self, email: str) -> dict[str, Any] | None:
+        """Return a customer row by email."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM customers WHERE lower(email) = lower(?)", (email,)).fetchone()
+        return dict(row) if row else None
+
+    def upsert_customer(self, stripe_customer_id: str | None, email: str, tier: str) -> dict[str, Any]:
+        """Create or update a billing customer record."""
+        now = utc_now()
+        with self._lock:
+            existing = None
+            if stripe_customer_id:
+                existing = self._conn.execute(
+                    "SELECT * FROM customers WHERE stripe_customer_id = ?",
+                    (stripe_customer_id,),
+                ).fetchone()
+            if existing is None:
+                existing = self._conn.execute(
+                    "SELECT * FROM customers WHERE lower(email) = lower(?)",
+                    (email,),
+                ).fetchone()
+            if existing is None:
+                customer_id = str(uuid.uuid4())
+                self._conn.execute(
+                    """
+                    INSERT INTO customers (id, stripe_customer_id, email, tier, api_key_hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (customer_id, stripe_customer_id, email, tier, now, now),
+                )
+            else:
+                customer_id = str(existing["id"])
+                current_hash = existing["api_key_hash"]
+                self._conn.execute(
+                    """
+                    UPDATE customers
+                    SET stripe_customer_id = COALESCE(?, stripe_customer_id),
+                        email = ?,
+                        tier = ?,
+                        api_key_hash = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (stripe_customer_id, email, tier, current_hash, now, customer_id),
+                )
+            self._conn.commit()
+        found = self.get_customer_by_id(customer_id)
+        if found is None:
+            raise RuntimeError("customer upsert failed")
+        return found
+
+    def get_customer_by_id(self, customer_id: str) -> dict[str, Any] | None:
+        """Return a customer row by internal id."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+        return dict(row) if row else None
+
+    def set_customer_api_key_hash(self, customer_id: str, api_key_hash: str) -> None:
+        """Persist a one-time issued customer API key hash."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE customers SET api_key_hash = ?, updated_at = ? WHERE id = ?",
+                (api_key_hash, utc_now(), customer_id),
+            )
+            self._conn.commit()
+
+    def is_billing_event_processed(self, event_id: str) -> bool:
+        """Return whether a Stripe event has already been processed."""
+        with self._lock:
+            row = self._conn.execute("SELECT 1 FROM billing_events WHERE event_id = ?", (event_id,)).fetchone()
+        return row is not None
+
+    def mark_billing_event_processed(self, event_id: str) -> None:
+        """Mark a Stripe event as processed."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO billing_events (event_id, processed_at) VALUES (?, ?)",
+                (event_id, utc_now()),
             )
             self._conn.commit()
 

@@ -12,7 +12,7 @@ from nacl.utils import random
 
 from tether.handles import BLOB_PREFIX, canonical_json, digest12, kvfold_dir, suffix
 
-_CONTENT_TYPE = "application/vnd.tether.encrypted-envelope+json"
+ENCRYPTED_ENVELOPE_CONTENT_TYPE = "application/vnd.tether.encrypted-envelope+json"
 
 
 def generate_keypair() -> tuple[str, str]:
@@ -24,6 +24,25 @@ def generate_keypair() -> tuple[str, str]:
 
 def collapse_encrypted(payload: str, recipient_pubkey_b64: str) -> str:
     """Encrypt a plaintext payload for a recipient and store a blob handle."""
+    handle, data = build_encrypted_envelope(payload, recipient_pubkey_b64)
+    root = _kvfold_root()
+    digest = suffix(handle, BLOB_PREFIX)
+    (root / digest).write_bytes(data)
+    (root / f"{digest}.toml").write_text(
+        f"handle = {json.dumps(handle)}\ncontent_type = {json.dumps(ENCRYPTED_ENVELOPE_CONTENT_TYPE)}\n",
+        encoding="utf-8",
+    )
+    return handle
+
+
+def resolve_encrypted(handle: str, privkey_b64: str) -> str:
+    """Decrypt an encrypted blob handle using the recipient private key."""
+    raw = (_kvfold_root() / suffix(handle, BLOB_PREFIX)).read_bytes()
+    return resolve_encrypted_bytes(raw, privkey_b64)
+
+
+def build_encrypted_envelope(payload: str, recipient_pubkey_b64: str) -> tuple[str, bytes]:
+    """Return the encrypted-envelope handle and canonical envelope bytes."""
     recipient_key = PublicKey(_b64decode(recipient_pubkey_b64, "recipient public key"))
     ephemeral_private = PrivateKey.generate()
     box = Box(ephemeral_private, recipient_key)
@@ -35,26 +54,17 @@ def collapse_encrypted(payload: str, recipient_pubkey_b64: str) -> str:
         "nonce": _b64encode(nonce),
     }
     data = canonical_json(envelope)
-    digest = digest12(data)
-    handle = f"{BLOB_PREFIX}{digest}"
-    root = _kvfold_root()
-    (root / digest).write_bytes(data)
-    (root / f"{digest}.toml").write_text(
-        f"handle = {json.dumps(handle)}\ncontent_type = {json.dumps(_CONTENT_TYPE)}\n",
-        encoding="utf-8",
-    )
-    return handle
+    return f"{BLOB_PREFIX}{digest12(data)}", data
 
 
-def resolve_encrypted(handle: str, privkey_b64: str) -> str:
-    """Decrypt an encrypted blob handle using the recipient private key."""
-    raw = (_kvfold_root() / suffix(handle, BLOB_PREFIX)).read_bytes()
+def resolve_encrypted_bytes(raw: bytes, privkey_b64: str) -> str:
+    """Decrypt canonical encrypted-envelope bytes using the recipient private key."""
     envelope = json.loads(raw.decode("utf-8"))
     if not isinstance(envelope, dict):
-        raise ValueError(f"encrypted envelope has invalid shape: {handle}")
+        raise ValueError("encrypted envelope has invalid shape")
     required_keys = {"encrypted_payload", "ephemeral_pubkey", "nonce"}
     if required_keys - set(envelope):
-        raise ValueError(f"encrypted envelope is missing fields: {handle}")
+        raise ValueError("encrypted envelope is missing fields")
 
     private_key = PrivateKey(_b64decode(privkey_b64, "recipient private key"))
     ephemeral_public = PublicKey(_b64decode(str(envelope["ephemeral_pubkey"]), "ephemeral public key"))

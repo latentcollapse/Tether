@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 import tomllib
@@ -19,23 +20,65 @@ from tether import SQLiteRuntime
 from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
 from tether.handles import BLOB_PREFIX, TREE_PREFIX, suffix
 from tether.exceptions import TetherError
+from tether.mcp_stdio_compat import compat_stdio_server
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from pydantic import AnyUrl
 import mcp.server
 
 
-# Global runtime instance (SQLite-backed for persistence)
-# Resolution order: TETHER_DB env var → XDG_DATA_HOME/tether/tether.db → ~/.local/share/tether/tether.db
-_default_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "tether"
-_default_dir.mkdir(parents=True, exist_ok=True)
-db_path = os.environ.get("TETHER_DB", str(_default_dir / "tether.db"))
-runtime = SQLiteRuntime(db_path)
-
-
-server = Server("tether")
 logger = logging.getLogger(__name__)
+server = Server("tether")
+
+
+def _candidate_db_paths() -> list[Path]:
+    configured = os.environ.get("TETHER_DB")
+    repo_root = Path(__file__).resolve().parent.parent
+    xdg_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "tether"
+    candidates: list[Path] = []
+
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    candidates.extend(
+        [
+            repo_root / "postoffice.db",
+            repo_root / "tether.db",
+            xdg_dir / "tether.db",
+            Path("/tmp/tether/tether.db"),
+        ]
+    )
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate if candidate.is_absolute() else (Path.cwd() / candidate).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(resolved)
+    return deduped
+
+
+def _init_runtime() -> tuple[SQLiteRuntime, str]:
+    configured = os.environ.get("TETHER_DB")
+    errors: list[str] = []
+
+    for candidate in _candidate_db_paths():
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            runtime = SQLiteRuntime(str(candidate))
+            logger.info("Using Tether MCP database at %s", candidate)
+            return runtime, str(candidate)
+        except (PermissionError, OSError, sqlite3.OperationalError) as exc:
+            errors.append(f"{candidate}: {exc}")
+            if configured and candidate == Path(configured).expanduser().resolve():
+                raise RuntimeError(f"Configured TETHER_DB is unusable: {candidate}: {exc}") from exc
+
+    raise RuntimeError("Unable to initialize Tether MCP database. Tried: " + " | ".join(errors))
+
+
+runtime, db_path = _init_runtime()
 
 
 NOTIFY_FILE = os.path.expanduser("~/.tether_notify")
@@ -876,10 +919,11 @@ def _tree_children(handle: str) -> list[str]:
 
 
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
+    async with compat_stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    import anyio
+
+    anyio.run(main, backend="asyncio")

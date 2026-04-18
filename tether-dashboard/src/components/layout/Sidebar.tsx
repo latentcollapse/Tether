@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Network, Search, Activity, Mail, Link as LinkIcon } from 'lucide-react';
+import { Network, Search, Activity, Mail, Link as LinkIcon, Settings } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useInboxStore } from '../../store/inboxStore';
 
@@ -12,6 +12,7 @@ export function Sidebar() {
     { to: "/connection", icon: LinkIcon, label: "Connection" },
     { to: "/handles", icon: Search, label: "Handles" },
     { to: "/usage", icon: Activity, label: "Usage" },
+    { to: "/settings", icon: Settings, label: "Settings" },
   ];
 
   return (

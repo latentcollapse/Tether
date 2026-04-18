@@ -70,11 +70,12 @@
 [[ticket]]
 id = "T-043"
 title = "Dashboard — Settings View"
-status = "open"
+status = "complete"
 tier = "yellow"
 area = ["frontend", "dashboard"]
-assignee = "unassigned"
+assignee = "codex"
 opened = "2026-04-17"
+completed = "2026-04-18"
 # New Settings nav item in sidebar. Controls for the local Tether runtime.
 # Autoping toggle — flip on = autonomous mode, agents wake each other on activity
 # Stale threshold — TETHER_STALE_HOURS, slider or number input, default 24h
@@ -87,11 +88,12 @@ opened = "2026-04-17"
 [[ticket]]
 id = "T-044"
 title = "Dashboard — Upgrade Flow (Stripe CTA)"
-status = "open"
+status = "complete"
 tier = "yellow"
 area = ["frontend", "dashboard", "billing"]
-assignee = "unassigned"
+assignee = "codex"
 opened = "2026-04-17"
+completed = "2026-04-18"
 # Surface the upgrade path from inside the dashboard. Two entry points:
 #
 # 1. Tier pill in header (already shows "Indie Tier" / "Free" etc.)
@@ -119,11 +121,12 @@ opened = "2026-04-17"
 [[ticket]]
 id = "T-057"
 title = "Ping Daemon Robustness — systemd services + dynamic pane discovery"
-status = "open"
+status = "complete"
 tier = "red"
 area = ["infra", "ping", "autonomous"]
 assignee = "codex"
 opened = "2026-04-18"
+completed = "2026-04-18"
 depends_on = ["T-056"]
 # Two root causes of fragility:
 #   1. Daemons die and nothing restarts them
@@ -139,11 +142,12 @@ depends_on = ["T-056"]
 [[ticket]]
 id = "T-056"
 title = "Autoping — Diagnose tmux injection failure + robustness overhaul"
-status = "open"
+status = "complete"
 tier = "red"
 area = ["infra", "ping", "autonomous"]
 assignee = "codex"
 opened = "2026-04-18"
+completed = "2026-04-18"
 # tmux injection not waking Codex/Gemini after daemon rewrites tonight.
 # Claude desktop notify path works. Buffer files written. Injection silent.
 # Codex pane %9, Gemini pane %7. Enable flags present.
@@ -187,11 +191,12 @@ depends_on = ["T-053"]
 [[ticket]]
 id = "T-053"
 title = "OpenClaw Socket — Tether Cloud Bridge"
-status = "open"
+status = "complete"
 tier = "red"
 area = ["openclaw", "relay"]
-assignee = "unassigned"
+assignee = "codex"
 opened = "2026-04-17"
+completed = "2026-04-18"
 # WebSocket bridge between Tether Cloud relay and OpenClaw runtime.
 # OpenClaw agent registers with Tether Cloud via API key.
 # Handles delivered to OpenClaw agent in real time via WebSocket push.
@@ -203,11 +208,12 @@ opened = "2026-04-17"
 [[ticket]]
 id = "T-052"
 title = "Cross-Machine Demo — The Pitch Moment"
-status = "open"
+status = "complete"
 tier = "red"
 area = ["openclaw", "demo"]
-assignee = "unassigned"
+assignee = "codex"
 opened = "2026-04-17"
+completed = "2026-04-18"
 # Two machines, two agents (e.g. claude@machine-a, codex@machine-b).
 # Scenario: junior agent hits a problem, packages context as handle, sends via relay.
 # Senior agent receives via WebSocket push, resolves, responds with solution handle.

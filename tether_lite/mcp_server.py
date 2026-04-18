@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
 from tether.handles import BLOB_PREFIX, TREE_PREFIX, suffix
+from tether.mcp_stdio_compat import compat_stdio_server
 from tether_lite.runtime import MessageNotFound, TetherLiteRuntime
 
 logger = logging.getLogger(__name__)
@@ -303,9 +303,11 @@ def _tree_children(handle: str) -> list[str]:
 
 async def main() -> None:
     """Run the TetherLite MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
+    async with compat_stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import anyio
+
+    anyio.run(main, backend="asyncio")

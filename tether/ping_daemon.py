@@ -2,20 +2,21 @@
 """
 Tether ping daemon — hybrid notification delivery.
 
-Delivery strategy per agent type:
-  - DESKTOP_NOTIFY_AGENTS (e.g. claude): notify-send desktop popup +
-    ~/.tether_notify for PROMPT_COMMAND pickup. Never injects into terminal —
-    Claude Code input cannot be interrupted safely.
-  - All other agents: tmux send-keys injection after idle-prompt detection.
-    tmux is the fallback for CLI agents (Codex, Gemini, Qwen) that don't
-    expose an HTTP API. OpenClaw agents should register an HTTP endpoint
-    in their Tether skill instead (see T-053).
+Delivery strategy:
+  - auto: desktop notify for configured agents, tmux injection for everyone else
+  - desktop: force desktop notifications only
+  - tmux: force tmux send-keys injection after idle-prompt detection
 
-Usage: python3 ping_daemon.py --agent <name> --pane <tmux_pane_id> --port <port>
-       python3 ping_daemon.py --agent claude --port 7703   (no --pane needed)
+Desktop mode writes notify-send plus ~/.tether_notify for PROMPT_COMMAND pickup.
+tmux is the fallback for CLI agents (Codex, Gemini, Qwen, Claude Code) that don't
+expose an HTTP API. OpenClaw agents should register an HTTP endpoint in their
+Tether skill instead (see T-053).
+
+Usage: python3 ping_daemon.py --agent <name> --port <port> [--delivery-mode auto|desktop|tmux]
 """
 import argparse
 import json
+import logging
 import os
 import platform
 import re
@@ -25,8 +26,7 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# These agents get desktop notifications only — never tmux injection.
-DESKTOP_NOTIFY_AGENTS = {"claude"}
+DEFAULT_DESKTOP_NOTIFY_AGENTS = {"openclaw"}
 
 IDLE_PATTERNS = [
     re.compile(r'\$\s*$'),                   # bash/zsh prompt
@@ -40,27 +40,85 @@ IDLE_PATTERNS = [
     re.compile(r'gpt-'),                     # Codex CLI status line
 ]
 
-IDLE_POLL_INTERVAL = 2   # seconds
-IDLE_MAX_WAIT = 30        # seconds — inject anyway after this
+AGENT_PATTERNS = {
+    "codex": [
+        re.compile(r'gpt-', re.IGNORECASE),
+        re.compile(r'\u203a'),
+        re.compile(r'codex', re.IGNORECASE),
+    ],
+    "gemini": [
+        re.compile(r'gemini', re.IGNORECASE),
+        re.compile(r'\u2726'),
+        re.compile(r'\u25c7'),
+    ],
+    "qwen": [
+        re.compile(r'qwen', re.IGNORECASE),
+    ],
+    "kilo": [
+        re.compile(r'kilo', re.IGNORECASE),
+    ],
+}
+
+IDLE_POLL_INTERVAL = 0.5  # seconds
+IDLE_MAX_WAIT = 5         # seconds — inject anyway after this
+logger = logging.getLogger(__name__)
 
 
 def is_enabled(agent: str) -> bool:
     return os.path.exists(f"/tmp/tether-ping-{agent}.enabled")
 
 
-# ── Desktop notification path (Claude) ────────────────────────────────────────
+def desktop_notify_agents() -> set[str]:
+    raw = os.environ.get("TETHER_PING_DESKTOP_AGENTS")
+    if raw is None:
+        return set(DEFAULT_DESKTOP_NOTIFY_AGENTS)
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
-def desktop_notify(notification: str) -> None:
+
+def uses_desktop_notify(agent: str, delivery_mode: str) -> bool:
+    if delivery_mode == "desktop":
+        return True
+    if delivery_mode == "tmux":
+        return False
+    return agent.lower() in desktop_notify_agents()
+
+
+def now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def update_state(state: dict, **fields) -> None:
+    with state["lock"]:
+        state.update(fields)
+
+
+# ── Desktop notification path ────────────────────────────────────────────────
+
+def write_prompt_fallback(notification: str) -> bool:
+    """Persist a prompt pickup file as the last local notification fallback."""
+    try:
+        with open(os.path.expanduser("~/.tether_notify"), "w", encoding="utf-8") as f:
+            f.write(notification + "\n")
+        return True
+    except OSError:
+        logger.exception("failed to write prompt fallback")
+        return False
+
+
+def desktop_notify(notification: str) -> bool:
+    """Attempt a desktop notification; return whether the desktop path succeeded."""
     system = platform.system()
     try:
         if system == "Linux":
-            subprocess.run(
+            result = subprocess.run(
                 ["notify-send", "-a", "Tether", "-t", "8000", "Tether", notification],
                 check=False, timeout=3,
             )
+            return result.returncode == 0
         elif system == "Darwin":
             script = f'display notification "{notification}" with title "Tether"'
-            subprocess.run(["osascript", "-e", script], check=False, timeout=3)
+            result = subprocess.run(["osascript", "-e", script], check=False, timeout=3)
+            return result.returncode == 0
         elif system == "Windows":
             ps = (
                 '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;'
@@ -69,61 +127,122 @@ def desktop_notify(notification: str) -> None:
                 f'$t.GetElementsByTagName("text")[1].AppendChild($t.CreateTextNode("{notification}")) | Out-Null;'
                 '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Tether").Show([Windows.UI.Notifications.ToastNotification]::new($t));'
             )
-            subprocess.run(["powershell", "-Command", ps], check=False, timeout=5)
-    except Exception:
-        pass
-    # Also write ~/.tether_notify for PROMPT_COMMAND pickup in bashrc
-    try:
-        with open(os.path.expanduser("~/.tether_notify"), "w") as f:
-            f.write(notification + "\n")
-    except Exception:
-        pass
+            result = subprocess.run(["powershell", "-Command", ps], check=False, timeout=5)
+            return result.returncode == 0
+        return False
+    except OSError:
+        logger.exception("desktop notify failed")
+        return False
+
+
+def deliver_desktop(notification: str, state: dict, reason: str) -> bool:
+    """Deliver a ping through the desktop fallback chain."""
+    logger.warning("using desktop fallback", extra={"reason": reason})
+    delivered = desktop_notify(notification)
+    update_state(state, last_delivery_path="desktop" if delivered else "prompt_file")
+    if delivered:
+        return True
+    file_written = write_prompt_fallback(notification)
+    if file_written:
+        logger.warning("desktop notify failed; wrote prompt fallback", extra={"reason": reason})
+    else:
+        logger.error("all ping delivery paths failed", extra={"reason": reason})
+    return file_written
 
 
 # ── tmux injection path (Codex, Gemini, Qwen, other CLI agents) ───────────────
 
+def capture_pane_lines(pane: str) -> list[str]:
+    result = subprocess.run(
+        ["tmux", "capture-pane", "-t", pane, "-p"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode != 0:
+        return []
+    return result.stdout.split("\n")
+
+
 def pane_is_idle(pane: str) -> bool:
     try:
-        result = subprocess.run(
-            ["tmux", "capture-pane", "-t", pane, "-p"],
-            capture_output=True, text=True, timeout=5,
-        )
-        lines = result.stdout.strip().split("\n")
+        lines = capture_pane_lines(pane)
         if not lines:
             return False
-        for line in reversed(lines[-5:]):
+
+        recent = lines[-8:]
+        if recent and not recent[-1].strip():
+            for line in reversed(recent[:-1]):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                for pat in IDLE_PATTERNS:
+                    if pat.search(stripped):
+                        return True
+            return True
+
+        for line in reversed(recent):
             stripped = line.strip()
             if not stripped:
                 continue
             for pat in IDLE_PATTERNS:
                 if pat.search(stripped):
                     return True
-        # Blank last line = cursor on empty input line = idle for terminal agents.
-        # Safe here because Claude uses desktop notify and never reaches this path.
-        if not lines[-1].strip():
-            return True
         return False
     except Exception:
         return False
 
 
-def resolve_pane(agent: str, fallback_pane: str) -> str:
+def pane_exists(pane: str) -> bool:
+    if not pane:
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        return pane in result.stdout.splitlines()
+    except Exception:
+        return False
+
+
+def pane_matches_agent(pane: str, agent: str) -> bool:
+    patterns = AGENT_PATTERNS.get(agent.lower(), [])
+    if not patterns or not pane:
+        return False
     try:
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
-            return fallback_pane
-        heuristics = {
-            "qwen":   [re.compile(r"Qwen")],
-            "gemini": [re.compile(r"✦"), re.compile(r"gemini")],
-            "codex":  [re.compile(r"Codex"), re.compile(r"◇"), re.compile(r"Ready")],
-            "kilo":   [re.compile(r"Kilo")],
-        }
-        patterns = heuristics.get(agent.lower(), [])
-        for line in result.stdout.strip().split("\n"):
-            parts = line.split("|")
+            return False
+        metadata = ""
+        for line in result.stdout.splitlines():
+            parts = line.split("|", 2)
+            if parts and parts[0] == pane:
+                metadata = " ".join(parts[1:])
+                break
+        haystack = metadata
+        if agent.lower() == "codex":
+            haystack += " " + "\n".join(capture_pane_lines(pane)[-8:])
+        return any(pattern.search(haystack) for pattern in patterns)
+    except Exception:
+        return False
+
+
+def resolve_pane(agent: str) -> str:
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return ""
+        patterns = AGENT_PATTERNS.get(agent.lower(), [])
+        candidates = []
+        for line in result.stdout.splitlines():
+            parts = line.split("|", 2)
             if len(parts) < 3:
                 continue
             pane_id, command, title = parts[0], parts[1], parts[2]
@@ -131,38 +250,143 @@ def resolve_pane(agent: str, fallback_pane: str) -> str:
                 return pane_id
             for pat in patterns:
                 if pat.search(title) or pat.search(command):
-                    return pane_id
-        return fallback_pane
+                    candidates.append(pane_id)
+                    break
+        for pane_id in candidates:
+            if pane_matches_agent(pane_id, agent):
+                return pane_id
+        for line in result.stdout.splitlines():
+            parts = line.split("|", 2)
+            if len(parts) < 3:
+                continue
+            pane_id = parts[0]
+            if pane_matches_agent(pane_id, agent):
+                return pane_id
+        return ""
     except Exception:
-        return fallback_pane
+        logger.exception("failed to resolve pane", extra={"agent": agent})
+        return ""
 
 
-def inject_when_idle(fallback_pane: str, notification: str, agent: str) -> None:
+def inject_when_idle(notification: str, agent: str, state: dict) -> None:
     if not is_enabled(agent):
+        update_state(state, last_inject_attempt_at=now_iso(), last_inject_success=False, last_delivery_path="disabled")
         return
-    pane = resolve_pane(agent, fallback_pane)
+    pane = ""
     deadline = time.time() + IDLE_MAX_WAIT
+    pane_was_idle = False
     while time.time() < deadline:
+        pane = resolve_pane(agent)
+        if not pane:
+            time.sleep(IDLE_POLL_INTERVAL)
+            continue
         if pane_is_idle(pane):
+            pane_was_idle = True
             break
         time.sleep(IDLE_POLL_INTERVAL)
+    if not pane:
+        update_state(
+            state,
+            pane="",
+            last_inject_attempt_at=now_iso(),
+            last_inject_pane="",
+            last_pane_was_idle=False,
+            last_inject_success=False,
+        )
+        deliver_desktop(notification, state, "no tmux pane found")
+        return
     try:
-        subprocess.run(["tmux", "send-keys", "-t", pane, notification], check=False)
+        update_state(
+            state,
+            pane=pane,
+            last_inject_attempt_at=now_iso(),
+            last_inject_pane=pane,
+            last_pane_was_idle=pane_was_idle,
+        )
+        literal = subprocess.run(["tmux", "send-keys", "-t", pane, "-l", notification], check=False)
         time.sleep(0.5)
-        subprocess.run(["tmux", "send-keys", "-t", pane, "C-m"], check=False)
-    except Exception:
-        pass
+        enter = subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=False)
+        if literal.returncode == 0 and enter.returncode == 0:
+            update_state(state, last_inject_success=True, last_inject_success_at=now_iso(), last_delivery_path="tmux")
+            return
+        update_state(state, last_inject_success=False)
+        deliver_desktop(notification, state, "tmux send-keys failed")
+    except OSError:
+        update_state(state, last_inject_success=False)
+        logger.exception("tmux injection raised")
+        deliver_desktop(notification, state, "tmux injection exception")
+
+
+def health_payload(agent: str, port: int, state: dict, delivery_mode: str) -> dict:
+    resolved_pane = ""
+    if not uses_desktop_notify(agent, delivery_mode):
+        resolved_pane = resolve_pane(agent)
+        update_state(state, pane=resolved_pane)
+    with state["lock"]:
+        return {
+            "agent": agent,
+            "pane": resolved_pane,
+            "port": port,
+            "enabled": is_enabled(agent),
+            "last_ping_at": state.get("last_ping_at"),
+            "last_inject_success": state.get("last_inject_success"),
+            "last_inject_success_at": state.get("last_inject_success_at"),
+            "last_pane_was_idle": state.get("last_pane_was_idle"),
+            "delivery_mode": delivery_mode,
+            "last_delivery_path": state.get("last_delivery_path"),
+        }
+
+
+def run_test_inject(agent: str, state: dict, delivery_mode: str) -> dict:
+    notification = f"[Tether] test ping for {agent} at {now_iso()}"
+    resolved_pane = resolve_pane(agent)
+    pane_was_idle = pane_is_idle(resolved_pane) if resolved_pane else False
+    update_state(state, last_ping_at=now_iso())
+    if uses_desktop_notify(agent, delivery_mode):
+        injected = deliver_desktop(notification, state, "test inject desktop path")
+        update_state(state, last_inject_attempt_at=now_iso(), last_inject_success=injected, last_inject_success_at=now_iso() if injected else None, last_pane_was_idle=True, pane=resolved_pane)
+    else:
+        inject_when_idle(notification, agent, state)
+        with state["lock"]:
+            injected = bool(state.get("last_inject_success"))
+    return {
+        "injected": injected,
+        "pane_was_idle": pane_was_idle,
+        "pane": resolved_pane,
+    }
 
 
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 class PingHandler(BaseHTTPRequestHandler):
-    def __init__(self, *args, agent=None, pane=None, **kwargs):
+    def __init__(self, *args, agent=None, state=None, delivery_mode="auto", **kwargs):
         self.agent = agent
-        self.pane = pane
+        self.state = state
+        self.delivery_mode = delivery_mode
         super().__init__(*args, **kwargs)
 
+    def _json_response(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path != "/health":
+            self._json_response(404, {"error": "not_found"})
+            return
+        self._json_response(
+            200,
+            health_payload(self.agent, self.server.server_port, self.state, self.delivery_mode),
+        )
+
     def do_POST(self):
+        if self.path == "/test-inject":
+            self._json_response(200, run_test_inject(self.agent, self.state, self.delivery_mode))
+            return
+
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         try:
@@ -170,6 +394,7 @@ class PingHandler(BaseHTTPRequestHandler):
             sender = data.get("from", "unknown")
             handle = data.get("handle", "")
             notification = f"[Tether] From agent: {sender}  Handle: '{handle}'"
+            update_state(self.state, last_ping_at=now_iso())
 
             # Buffer file for observability
             try:
@@ -178,19 +403,22 @@ class PingHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            if self.agent.lower() in DESKTOP_NOTIFY_AGENTS:
-                thread = threading.Thread(target=desktop_notify, args=(notification,), daemon=True)
+            if uses_desktop_notify(self.agent, self.delivery_mode):
+                thread = threading.Thread(
+                    target=deliver_desktop,
+                    args=(notification, self.state, "desktop delivery mode"),
+                    daemon=True,
+                )
             else:
                 thread = threading.Thread(
                     target=inject_when_idle,
-                    args=(self.pane or "", notification, self.agent),
+                    args=(notification, self.agent, self.state),
                     daemon=True,
                 )
             thread.start()
         except Exception:
             pass
-        self.send_response(200)
-        self.end_headers()
+        self._json_response(200, {"ok": True})
 
     def log_message(self, format, *args):
         pass
@@ -199,18 +427,41 @@ class PingHandler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description="Tether ping daemon")
     parser.add_argument("--agent", required=True)
-    parser.add_argument("--pane", default="", help="tmux pane ID (not needed for desktop-notify agents)")
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--delivery-mode", choices=("auto", "desktop", "tmux"), default="auto")
     args = parser.parse_args()
 
-    if args.agent.lower() not in DESKTOP_NOTIFY_AGENTS and not args.pane:
-        print(f"WARNING: --pane not set for {args.agent}. tmux injection will use dynamic pane lookup only.")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    if not uses_desktop_notify(args.agent, args.delivery_mode):
+        startup_pane = resolve_pane(args.agent)
+        if startup_pane:
+            logger.info("resolved tmux pane on startup", extra={"agent": args.agent, "pane": startup_pane})
+        else:
+            logger.warning("no tmux pane found on startup", extra={"agent": args.agent})
+
+    state = {
+        "lock": threading.Lock(),
+        "pane": "",
+        "last_ping_at": None,
+        "last_inject_attempt_at": None,
+        "last_inject_success": None,
+        "last_inject_success_at": None,
+        "last_pane_was_idle": None,
+        "last_inject_pane": None,
+        "last_delivery_path": None,
+    }
 
     def handler_factory(*a, **kw):
-        return PingHandler(*a, agent=args.agent, pane=args.pane, **kw)
+        return PingHandler(*a, agent=args.agent, state=state, delivery_mode=args.delivery_mode, **kw)
 
     server = HTTPServer(("localhost", args.port), handler_factory)
-    mode = "desktop notify" if args.agent.lower() in DESKTOP_NOTIFY_AGENTS else f"tmux inject (pane {args.pane or 'dynamic'})"
+    if uses_desktop_notify(args.agent, args.delivery_mode):
+        mode = "desktop notify"
+    else:
+        mode = "tmux inject (dynamic discovery)"
     print(f"Tether ping daemon [{args.agent}] on http://localhost:{args.port} — {mode}")
     print(f'Register: tether_register_ping(agent="{args.agent}", url="http://localhost:{args.port}")')
     sys.stdout.flush()

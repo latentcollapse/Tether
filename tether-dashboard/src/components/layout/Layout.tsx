@@ -1,6 +1,7 @@
 import { Outlet, Navigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { UpgradeModal } from '../billing/UpgradeModal';
 import { useAuthStore } from '../../store/authStore';
 import { useEffect } from 'react';
 import { connectWebSocket, disconnectWebSocket } from '../../ws/socket';
@@ -32,6 +33,7 @@ export function Layout() {
         <main className="flex-1 overflow-auto relative z-10">
           <Outlet />
         </main>
+        <UpgradeModal />
         
         {/* Immersive UI Atmosphere Element */}
         <div className="absolute w-[300px] h-[300px] bg-[#7000ff] blur-[120px] opacity-10 bottom-[-50px] right-[-50px] pointer-events-none rounded-full z-0"></div>

@@ -1,22 +1,39 @@
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { useSubscriptionStore } from '../store/subscriptionStore';
+import { getTierUsageSnapshot, getUpgradeTarget, isNearLimit } from '../utils/subscription';
 
-const mockDailyData = Array.from({ length: 7 }).map((_, i) => ({
-  name: i === 6 ? 'Today' : `${6 - i}d ago`,
-  sent: Math.floor(Math.random() * 5000) + 1000,
-  received: Math.floor(Math.random() * 5000) + 800,
-}));
+const mockDailyData = [
+  { name: '6d ago', sent: 1800, received: 1400 },
+  { name: '5d ago', sent: 2100, received: 1700 },
+  { name: '4d ago', sent: 2600, received: 1900 },
+  { name: '3d ago', sent: 3100, received: 2400 },
+  { name: '2d ago', sent: 3700, received: 2800 },
+  { name: '1d ago', sent: 4200, received: 3200 },
+  { name: 'Today', sent: 4821, received: 3610 },
+];
 
-const mockLatencyData = Array.from({ length: 12 }).map((_, i) => {
-  const base = 30 + Math.random() * 20;
-  return {
-    time: `${i * 2}:00`,
-    p50: base,
-    p95: base + 15 + Math.random() * 10,
-    p99: base + 40 + Math.random() * 20,
-  };
-});
+const mockLatencyData = [
+  { time: '0:00', p50: 32, p95: 48, p99: 73 },
+  { time: '2:00', p50: 30, p95: 46, p99: 68 },
+  { time: '4:00', p50: 34, p95: 52, p99: 77 },
+  { time: '6:00', p50: 36, p95: 54, p99: 82 },
+  { time: '8:00', p50: 40, p95: 58, p99: 88 },
+  { time: '10:00', p50: 42, p95: 61, p99: 91 },
+  { time: '12:00', p50: 39, p95: 56, p99: 84 },
+  { time: '14:00', p50: 41, p95: 60, p99: 89 },
+  { time: '16:00', p50: 38, p95: 55, p99: 83 },
+  { time: '18:00', p50: 35, p95: 53, p99: 79 },
+  { time: '20:00', p50: 33, p95: 50, p99: 75 },
+  { time: '22:00', p50: 31, p95: 47, p99: 71 },
+];
 
 export function UsageView() {
+  const currentTier = useSubscriptionStore((state) => state.currentTier);
+  const openUpgradeModal = useSubscriptionStore((state) => state.openUpgradeModal);
+  const usage = getTierUsageSnapshot(currentTier);
+  const upgradeTarget = getUpgradeTarget(currentTier);
+  const showNearLimitBanner = currentTier !== 'Free' && isNearLimit(usage) && upgradeTarget;
+
   return (
     <div className="w-full max-w-6xl mx-auto p-6 flex flex-col gap-8 pb-12">
       <div>
@@ -24,13 +41,33 @@ export function UsageView() {
         <p className="text-[#8892b0] text-sm">Network volume, latency, and tier limits.</p>
       </div>
 
+      {showNearLimitBanner ? (
+        <div className="flex flex-col gap-3 rounded-xl border border-[#00f2ff]/25 bg-[#00f2ff]/8 p-5 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-white">
+              You&apos;re at {usage.agentsRegistered}/{usage.agentsLimit} nodes. Upgrade to {upgradeTarget.tier} for {upgradeTarget.nodes} nodes.
+            </div>
+            <div className="mt-1 text-sm text-[#b8c2d6]">
+              Current tier usage is near its cap. Move up before new nodes or message spikes get throttled.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={openUpgradeModal}
+            className="inline-flex items-center justify-center rounded-lg bg-[#00f2ff] px-4 py-2 text-sm font-semibold text-[#05060a] transition-colors hover:bg-[#6cf7ff]"
+          >
+            Upgrade
+          </button>
+        </div>
+      ) : null}
+
       {/* Stats row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
-          { label: 'Messages', value: '4,821', sub: 'today', trend: true },
-          { label: 'Agents', value: '3', sub: 'online', trend: true },
+          { label: 'Messages', value: usage.messagesUsedToday.toLocaleString(), sub: `${usage.messageLimitToday.toLocaleString()} daily cap`, trend: true },
+          { label: 'Agents', value: usage.agentsRegistered.toString(), sub: `${usage.agentsLimit} registered`, trend: true },
           { label: 'Avg Latency', value: '42ms', sub: 'delivery', trend: true },
-          { label: 'Tier', value: 'Indie', sub: '84% used', trend: false }
+          { label: 'Tier', value: currentTier, sub: currentTier === 'Free' ? 'upgrade available' : 'managed in Stripe', trend: false }
         ].map((stat) => (
           <div key={stat.label} className="bg-[#0f111a] border border-[#ffffff14] rounded-2xl p-6 stat-card-gradient overflow-hidden">
             <div className="text-[12px] uppercase tracking-[1px] text-[#8892b0] mb-2">{stat.label}</div>
@@ -39,6 +76,26 @@ export function UsageView() {
           </div>
         ))}
       </div>
+
+      {currentTier === 'Free' ? (
+        <div className="rounded-xl border border-[#ffffff14] bg-[#0f111a] p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="text-base font-semibold text-white">Need more than a local node?</div>
+              <div className="mt-1 text-sm text-[#8892b0]">
+                Move to Duo for direct encrypted machine-to-machine links, or Basic for hosted relay delivery.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={openUpgradeModal}
+              className="inline-flex items-center justify-center rounded-lg border border-[#00f2ff]/30 bg-[#00f2ff]/10 px-4 py-2 text-sm font-semibold text-[#8ffcff] transition-colors hover:bg-[#00f2ff]/15"
+            >
+              Upgrade
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Messages Chart */}

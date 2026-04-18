@@ -1,0 +1,26 @@
+{
+  "name": "openclaw-plugin-tether",
+  "version": "1.6.0",
+  "description": "OpenClaw plugin for Tether inbound delivery and outbound MCP tools.",
+  "type": "module",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  },
+  "files": [
+    "index.js",
+    "openclaw.plugin.json",
+    "README.md",
+    "SKILL.md",
+    "config.example.json",
+    "scripts/",
+    "skills/",
+    "src/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "openclaw": "^2026.3.9"
+  }
+}

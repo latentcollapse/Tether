@@ -1,4 +1,4 @@
-export type TierId = 'Free' | 'Indie' | 'Team' | 'Enterprise';
+export type TierId = 'Free' | 'Duo' | 'Basic' | 'Pro' | 'Enterprise' | 'Indie' | 'Team';
 
 export interface Usage {
   messagesUsedToday: number;

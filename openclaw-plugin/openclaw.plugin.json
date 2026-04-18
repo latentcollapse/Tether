@@ -1,0 +1,86 @@
+{
+  "id": "tether",
+  "name": "Tether",
+  "description": "Inbound Tether delivery for OpenClaw plus outbound Tether MCP tools.",
+  "skills": ["./skills"],
+  "uiHints": {
+    "agent": {
+      "label": "Tether Agent Name",
+      "help": "Agent name used for inbox lookups and ping registration."
+    },
+    "sessionKey": {
+      "label": "Fallback Session Key",
+      "help": "Used when no active OpenClaw session has touched the plugin yet."
+    },
+    "lane": {
+      "label": "Gateway Lane",
+      "help": "Queue lane used for inbound Tether notifications."
+    },
+    "notifyUrl": {
+      "label": "Notify URL",
+      "help": "Public or local URL Tether should POST to. Overrides TETHER_NOTIFY_PORT-derived URL."
+    },
+    "notifyPath": {
+      "label": "Notify Path",
+      "help": "Primary plugin-owned ingress path under the OpenClaw gateway."
+    },
+    "mcpPath": {
+      "label": "Tether MCP Path",
+      "help": "Path to tether/mcp_server.py. Usually left unset."
+    },
+    "dbPath": {
+      "label": "Tether DB Path",
+      "help": "Path to the Tether SQLite database passed through as TETHER_DB."
+    },
+    "autoRegisterPing": {
+      "label": "Auto Register Ping",
+      "help": "Register the plugin endpoint with Tether on plugin load."
+    },
+    "mcpTimeoutMs": {
+      "label": "MCP Timeout (ms)",
+      "help": "Timeout for each outbound Tether tool invocation."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agent": {
+        "type": "string",
+        "description": "Tether agent name used for inbox defaults and ping registration."
+      },
+      "sessionKey": {
+        "type": "string",
+        "description": "Fallback OpenClaw session key for inbound Tether notifications."
+      },
+      "lane": {
+        "type": "string",
+        "description": "Gateway queue lane for inbound notifications."
+      },
+      "notifyUrl": {
+        "type": "string",
+        "description": "Explicit callback URL to register with Tether."
+      },
+      "notifyPath": {
+        "type": "string",
+        "description": "Primary plugin-owned ingress path."
+      },
+      "mcpPath": {
+        "type": "string",
+        "description": "Path to tether/mcp_server.py."
+      },
+      "dbPath": {
+        "type": "string",
+        "description": "Path to Tether's SQLite database."
+      },
+      "autoRegisterPing": {
+        "type": "boolean",
+        "description": "Register the notify URL on plugin load."
+      },
+      "mcpTimeoutMs": {
+        "type": "number",
+        "description": "Timeout for outbound MCP tool calls."
+      }
+    }
+  }
+}

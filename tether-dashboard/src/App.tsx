@@ -8,6 +8,7 @@ import { HandleBrowserView } from './views/HandleBrowserView';
 import { ConnectionView } from './views/ConnectionView';
 import { UsageView } from './views/UsageView';
 import { MessagesView } from './views/MessagesView';
+import { SettingsView } from './views/SettingsView';
 import { api } from './api/client';
 import { useAuthStore } from './store/authStore';
 
@@ -80,6 +81,7 @@ export default function App() {
           <Route path="/connection" element={<ConnectionView />} />
           <Route path="/handles" element={<HandleBrowserView />} />
           <Route path="/usage" element={<UsageView />} />
+          <Route path="/settings" element={<SettingsView />} />
         </Route>
       </Routes>
     </Router>

@@ -1,0 +1,35 @@
+{
+  "plugins": {
+    "allow": ["tether"],
+    "load": {
+      "paths": ["/mnt/d/Language Projects/Tether/openclaw-plugin"]
+    },
+    "entries": {
+      "tether": {
+        "enabled": true,
+        "config": {
+          "agent": "openclaw",
+          "sessionKey": "hook:tether",
+          "lane": "tether",
+          "dbPath": "/mnt/d/Language Projects/Tether/postoffice.db",
+          "mcpPath": "/mnt/d/Language Projects/Tether/tether/mcp_server.py"
+        }
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "path": "/hooks",
+    "token": "replace-me",
+    "mappings": [
+      {
+        "id": "tether",
+        "match": { "path": "tether" },
+        "action": "agent",
+        "wakeMode": "now",
+        "sessionKey": "hook:tether",
+        "messageTemplate": "[Tether] From {{payload.from}}: {{payload.subject}} — handle: {{payload.handle}}"
+      }
+    ]
+  }
+}

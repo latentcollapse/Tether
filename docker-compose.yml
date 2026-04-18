@@ -1,18 +1,20 @@
-version: "3.8"
-
 services:
-  tether-post-office:
+  tether-relay:
     build: .
-    container_name: tether-post-office
+    container_name: tether-relay
     ports:
-      - "7890:7890"
+      - "${TETHER_RELAY_PORT:-8000}:${TETHER_RELAY_PORT:-8000}"
     volumes:
-      - tether-data:/data
+      - tether-relay-data:/data
     environment:
-      - TETHER_DB=/data/tether.db
-      - TETHER_HOST=0.0.0.0
-      - TETHER_PORT=7890
+      - TETHER_RELAY_HOST=0.0.0.0
+      - TETHER_RELAY_PORT=${TETHER_RELAY_PORT:-8000}
+      - TETHER_RELAY_DB=/data/relay.db
+      - TETHER_RELAY_KEY_PREFIX=${TETHER_RELAY_KEY_PREFIX:-tk_live_}
+      - TETHER_RELAY_BCRYPT_ROUNDS=${TETHER_RELAY_BCRYPT_ROUNDS:-12}
+      - TETHER_RATE_LIMIT_PER_MIN=${TETHER_RATE_LIMIT_PER_MIN:-100}
+      - TETHER_ADMIN_KEY=${TETHER_ADMIN_KEY:-change-me}
     restart: unless-stopped
 
 volumes:
-  tether-data:
+  tether-relay-data:

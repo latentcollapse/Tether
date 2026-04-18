@@ -5,14 +5,29 @@ import { Badge } from '../shared/Badge';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { LogOut } from 'lucide-react';
 import { disconnectWebSocket } from '../../ws/socket';
+import { useSubscriptionStore } from '../../store/subscriptionStore';
+import { getPortalUrl, isPaidTier, openExternalUrl } from '../../utils/subscription';
 
 export function TopBar() {
   const { logout, isLocalMode } = useAuthStore();
   const { isConnected } = useConnectionStore();
+  const currentTier = useSubscriptionStore((state) => state.currentTier);
+  const openUpgradeModal = useSubscriptionStore((state) => state.openUpgradeModal);
+  const portalUrl = getPortalUrl();
 
   const handleLogout = () => {
     disconnectWebSocket();
     logout();
+  };
+
+  const handleTierClick = () => {
+    if (currentTier === 'Free') {
+      openUpgradeModal();
+      return;
+    }
+    if (isPaidTier(currentTier) && portalUrl) {
+      openExternalUrl(portalUrl);
+    }
   };
 
   return (
@@ -41,10 +56,26 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="hidden sm:flex items-center bg-[#0f111a] border border-[#ffffff14] rounded-full px-4 py-2 text-[13px] text-[#8892b0]">
-          <span className="w-2 h-2 rounded-full bg-[#00f2ff] mr-2 shadow-[0_0_8px_#00f2ff]"></span>
-          Indie Tier
-        </div>
+        <button
+          type="button"
+          onClick={handleTierClick}
+          disabled={isPaidTier(currentTier) && !portalUrl}
+          className={`hidden sm:flex items-center rounded-full px-4 py-2 text-[13px] border transition-colors ${
+            currentTier === 'Free'
+              ? 'border-[#ffffff14] bg-[#0f111a] text-[#8892b0] hover:text-white'
+              : 'border-[#00f2ff]/30 bg-[#00f2ff]/10 text-[#8ffcff] hover:bg-[#00f2ff]/15 disabled:cursor-not-allowed disabled:opacity-60'
+          }`}
+          title={currentTier === 'Free' ? 'Upgrade Tether' : portalUrl ? 'Manage Subscription' : 'Subscription portal unavailable'}
+        >
+          <span
+            className={`mr-2 h-2 w-2 rounded-full ${
+              currentTier === 'Free'
+                ? 'bg-[#8892b0]'
+                : 'bg-[#00ff88] shadow-[0_0_8px_#00ff88]'
+            }`}
+          ></span>
+          {currentTier} Tier
+        </button>
         {!isLocalMode && (
           <button 
             onClick={handleLogout}

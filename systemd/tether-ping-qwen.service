@@ -1,0 +1,14 @@
+[Unit]
+Description=Tether Ping Daemon (qwen)
+After=default.target
+
+[Service]
+Type=simple
+Environment="TETHER_DB=/mnt/d/Language Projects/Tether/postoffice.db"
+ExecStartPre=/usr/bin/touch /tmp/tether-ping-qwen.enabled
+ExecStart=/usr/bin/python3 /mnt/d/Language\x20Projects/Tether/tether/ping_daemon.py --agent qwen --port 7701 --delivery-mode tmux
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

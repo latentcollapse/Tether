@@ -93,7 +93,7 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 @pytest.mark.anyio
-async def test_pubkey_route_requires_enterprise_tier(
+async def test_pubkey_route_requires_paid_tier(
     relay_env: RelayDB,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,6 +104,7 @@ async def test_pubkey_route_requires_enterprise_tier(
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         sender = await _register(client, "sender")
         recipient = await _register(client, "recipient", public_key)
+        relay_env.set_agent_tier(sender["agent_id"], "free")
 
         response = await client.get(
             f"/v1/agents/{recipient['agent_id']}/pubkey",
@@ -113,14 +114,14 @@ async def test_pubkey_route_requires_enterprise_tier(
         assert response.status_code == 403
         assert response.json() == {
             "error": "upgrade_required",
-            "tier": "teams",
+            "tier": "free",
             "feature": "encrypted_envelopes",
             "upgrade": "upgrade tier for encrypted_envelopes",
         }
 
 
 @pytest.mark.anyio
-async def test_enterprise_agents_can_fetch_pubkey(
+async def test_teams_agents_can_fetch_pubkey(
     relay_env: RelayDB,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -131,8 +132,6 @@ async def test_enterprise_agents_can_fetch_pubkey(
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         sender = await _register(client, "sender")
         recipient = await _register(client, "recipient", public_key)
-        relay_env.set_agent_tier(sender["agent_id"], "enterprise")
-        relay_env.set_agent_tier(recipient["agent_id"], "enterprise")
 
         response = await client.get(
             f"/v1/agents/{recipient['agent_id']}/pubkey",

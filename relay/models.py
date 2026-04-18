@@ -47,6 +47,37 @@ class HandleStatusResponse(BaseModel):
     status: str
 
 
+class BlobUploadRequest(BaseModel):
+    handle: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    payload_b64: str = Field(min_length=1)
+
+
+class BlobUploadResponse(BaseModel):
+    handle: str
+    stored: bool
+
+
+class BlobResponse(BaseModel):
+    handle: str
+    content_type: str
+    payload_b64: str
+
+
+class BillingKeyResponse(BaseModel):
+    api_key: str
+    customer_id: str
+    tier: str
+
+
+class BillingResendRequest(BaseModel):
+    email: str = Field(min_length=3)
+
+
+class BillingResendResponse(BaseModel):
+    status: str
+
+
 class KeyCreateRequest(BaseModel):
     agent_id: str = Field(min_length=1)
     label: str | None = None
