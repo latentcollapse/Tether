@@ -1,0 +1,28 @@
+"""Relay configuration."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RelayConfig:
+    """Environment-backed relay configuration."""
+
+    host: str
+    port: int
+    db_path: str
+    api_key_prefix: str
+    bcrypt_rounds: int
+
+
+def get_config() -> RelayConfig:
+    """Load relay configuration from environment variables."""
+    return RelayConfig(
+        host=os.environ.get("TETHER_RELAY_HOST", "0.0.0.0"),
+        port=int(os.environ.get("TETHER_RELAY_PORT", "8000")),
+        db_path=os.environ.get("TETHER_RELAY_DB", "./relay.db"),
+        api_key_prefix=os.environ.get("TETHER_RELAY_KEY_PREFIX", "tk_live_"),
+        bcrypt_rounds=int(os.environ.get("TETHER_RELAY_BCRYPT_ROUNDS", "12")),
+    )
