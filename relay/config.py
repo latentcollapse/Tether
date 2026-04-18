@@ -15,6 +15,7 @@ class RelayConfig:
     db_path: str
     api_key_prefix: str
     bcrypt_rounds: int
+    rate_limit_per_min: int
 
 
 def get_config() -> RelayConfig:
@@ -25,4 +26,5 @@ def get_config() -> RelayConfig:
         db_path=os.environ.get("TETHER_RELAY_DB", "./relay.db"),
         api_key_prefix=os.environ.get("TETHER_RELAY_KEY_PREFIX", "tk_live_"),
         bcrypt_rounds=int(os.environ.get("TETHER_RELAY_BCRYPT_ROUNDS", "12")),
+        rate_limit_per_min=int(os.environ.get("TETHER_RATE_LIMIT_PER_MIN", "100")),
     )

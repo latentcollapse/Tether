@@ -40,6 +40,31 @@ class HandleStatusResponse(BaseModel):
     status: str
 
 
+class KeyCreateRequest(BaseModel):
+    agent_id: str = Field(min_length=1)
+    label: str | None = None
+
+
+class KeyCreateResponse(BaseModel):
+    key_id: str
+    api_key: str
+    agent_id: str
+    created_at: str
+
+
+class KeyRotateResponse(BaseModel):
+    new_key_id: str
+    api_key: str
+
+
+class KeyInfo(BaseModel):
+    key_id: str
+    agent_id: str
+    label: str | None
+    created_at: str
+    revoked_at: str | None
+
+
 class HandlePush(BaseModel):
     type: str = "handle"
     handle: str
