@@ -1,0 +1,6 @@
+{
+  "name": "Tether Dashboard",
+  "description": "Real-time web GUI for monitoring and controlling a Tether agent network.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

@@ -21,6 +21,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 IDLE_PATTERNS = [
     re.compile(r'\$\s*$'),                    # bash/zsh prompt
     re.compile(r'>\s*$'),                     # Qwen Code / Gemini idle prompt
+    re.compile(r'\u276f\s*$'),               # Claude Code ❯ prompt (unicode)
     re.compile(r'Waiting for your input'),     # Claude Code idle text
     re.compile(r'^\?\s*$'),                   # Claude Code ? prompt
 ]
@@ -60,28 +61,62 @@ def is_enabled(agent: str) -> bool:
     return os.path.exists(f"/tmp/tether-ping-{agent}.enabled")
 
 
-def inject_when_idle(pane: str, notification: str, agent: str, timeout: int = IDLE_MAX_WAIT):
+def resolve_pane(agent: str, fallback_pane: str) -> str:
+    """Dynamically resolve the tmux pane currently running the agent's process."""
+    try:
+        # Format: id|command|title
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return fallback_pane
+
+        lines = result.stdout.strip().split("\n")
+        
+        # Heuristics for agent matching
+        heuristics = {
+            "claude": [re.compile(r"Claude Code"), re.compile(r"claude")],
+            "qwen": [re.compile(r"Qwen")],
+            "gemini": [re.compile(r"✦"), re.compile(r"gemini")],
+            "kilo": [re.compile(r"Kilo")],
+            "codex": [re.compile(r"Codex")],
+        }
+        
+        patterns = heuristics.get(agent.lower(), [])
+        
+        for line in lines:
+            parts = line.split("|")
+            if len(parts) < 3:
+                continue
+            pane_id, command, title = parts[0], parts[1], parts[2]
+            
+            # Match by command
+            if command.lower() == agent.lower():
+                return pane_id
+            
+            # Match by title or command patterns
+            for pat in patterns:
+                if pat.search(title) or pat.search(command):
+                    return pane_id
+                    
+        return fallback_pane
+    except Exception:
+        return fallback_pane
+
+
+def inject_when_idle(fallback_pane: str, notification: str, agent: str, timeout: int = IDLE_MAX_WAIT):
     """Wait for idle prompt, then inject notification. Only fires if enabled."""
     if not is_enabled(agent):
         return  # Pings disabled — drop silently
 
+    # Resolve target pane dynamically at fire time
+    pane = resolve_pane(agent, fallback_pane)
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            # Capture twice with a gap — if output hasn't changed, pane is settled
-            r1 = subprocess.run(
-                ["tmux", "capture-pane", "-t", pane, "-p"],
-                capture_output=True, text=True, timeout=5,
-            )
-            time.sleep(0.5)
-            r2 = subprocess.run(
-                ["tmux", "capture-pane", "-t", pane, "-p"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r1.stdout == r2.stdout:
-                break  # Pane settled
-        except Exception:
-            break
+        if pane_is_idle(pane):
+            break  # Pane is at a known idle prompt
         time.sleep(IDLE_POLL_INTERVAL)
 
     # Inject the command, wait a beat, then submit

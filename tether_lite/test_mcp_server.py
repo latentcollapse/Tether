@@ -25,6 +25,10 @@ def test_list_tools_exposes_required_surface() -> None:
         "tether_generate_keypair",
         "tether_collapse_encrypted",
         "tether_resolve_encrypted",
+        "tether_collapse_blob",
+        "tether_resolve_blob",
+        "tether_collapse_tree",
+        "tether_resolve_tree",
     }
 
 
@@ -88,3 +92,36 @@ def test_mcp_encrypted_round_trip() -> None:
     )
 
     assert json.loads(resolved[0].text) == {"payload": "secret from lite"}
+
+
+def test_mcp_blob_round_trip() -> None:
+    payload = "aGVsbG8gYmxvYg=="
+
+    collapsed = asyncio.run(
+        mcp_server.call_tool(
+            "tether_collapse_blob",
+            {"bytes_b64": payload, "content_type": "text/plain"},
+        )
+    )
+    handle = json.loads(collapsed[0].text)["handle"]
+
+    resolved = asyncio.run(mcp_server.call_tool("tether_resolve_blob", {"handle": handle}))
+
+    assert json.loads(resolved[0].text) == {
+        "bytes_b64": payload,
+        "content_type": "text/plain",
+    }
+
+
+def test_mcp_tree_round_trip() -> None:
+    collapsed = asyncio.run(
+        mcp_server.call_tool(
+            "tether_collapse_tree",
+            {"handles": ["h&l_inline_one", "h&l_blob_two"]},
+        )
+    )
+    handle = json.loads(collapsed[0].text)["handle"]
+
+    resolved = asyncio.run(mcp_server.call_tool("tether_resolve_tree", {"handle": handle}))
+
+    assert json.loads(resolved[0].text) == {"handles": ["h&l_inline_one", "h&l_blob_two"]}

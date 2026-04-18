@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from mcp.types import TextContent, Tool
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
+from tether.handles import BLOB_PREFIX, TREE_PREFIX, suffix
 from tether_lite.runtime import MessageNotFound, TetherLiteRuntime
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,55 @@ async def list_tools() -> list[Tool]:
                     "private_key": {"type": "string", "description": "Recipient private key in base64"},
                 },
                 "required": ["handle", "private_key"],
+            },
+        ),
+        Tool(
+            name="tether_collapse_blob",
+            description="Base64-decode bytes, store them as a blob handle, and return the handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bytes_b64": {"type": "string", "description": "Base64-encoded blob bytes"},
+                    "content_type": {"type": "string", "description": "Blob content type"},
+                },
+                "required": ["bytes_b64", "content_type"],
+            },
+        ),
+        Tool(
+            name="tether_resolve_blob",
+            description="Resolve a blob handle to base64 bytes and content type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Blob handle"},
+                },
+                "required": ["handle"],
+            },
+        ),
+        Tool(
+            name="tether_collapse_tree",
+            description="Store an ordered list of child handles as a tree handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered child handles",
+                    },
+                },
+                "required": ["handles"],
+            },
+        ),
+        Tool(
+            name="tether_resolve_tree",
+            description="Resolve a tree handle to its ordered child handles.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Tree handle"},
+                },
+                "required": ["handle"],
             },
         ),
         Tool(
@@ -134,6 +186,31 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = resolve_encrypted(arguments["handle"], arguments["private_key"])
             return [_text({"payload": payload})]
 
+        if name == "tether_collapse_blob":
+            blob_bytes = _decode_b64(arguments["bytes_b64"], "bytes_b64")
+            handle = runtime.collapse_blob(blob_bytes, arguments["content_type"])
+            return [_text({"handle": handle})]
+
+        if name == "tether_resolve_blob":
+            handle = str(arguments["handle"])
+            if not handle.startswith(BLOB_PREFIX):
+                raise ValueError("handle must start with h&l_blob_")
+            blob_bytes = runtime.resolve(handle)
+            if not isinstance(blob_bytes, bytes):
+                raise ValueError(f"blob handle did not resolve to bytes: {handle}")
+            return [_text({"bytes_b64": _encode_b64(blob_bytes), "content_type": _blob_content_type(handle)})]
+
+        if name == "tether_collapse_tree":
+            handles = [str(handle) for handle in arguments["handles"]]
+            handle = runtime.collapse_tree(handles)
+            return [_text({"handle": handle})]
+
+        if name == "tether_resolve_tree":
+            handle = str(arguments["handle"])
+            if not handle.startswith(TREE_PREFIX):
+                raise ValueError("handle must start with h&l_tree_")
+            return [_text({"handles": _tree_children(handle)})]
+
         if name == "tether_send":
             handle = runtime.send(
                 from_agent=arguments.get("from_agent", "unknown"),
@@ -189,6 +266,39 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 def _text(value: dict[str, Any], indent: int | None = None) -> TextContent:
     """Build a JSON TextContent response."""
     return TextContent(type="text", text=json.dumps(value, indent=indent))
+
+
+def _encode_b64(data: bytes) -> str:
+    """Encode bytes as ASCII base64."""
+    return base64.b64encode(data).decode("ascii")
+
+
+def _decode_b64(data: str, label: str) -> bytes:
+    """Decode base64 input with a stable error."""
+    try:
+        return base64.b64decode(data.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ValueError(f"invalid {label}") from exc
+
+
+def _blob_content_type(handle: str) -> str:
+    """Read blob content type from the KVFold sidecar TOML."""
+    sidecar = runtime._kvfold_path(f"{suffix(handle, BLOB_PREFIX)}.toml")
+    with sidecar.open("rb") as fh:
+        metadata = tomllib.load(fh)
+    content_type = metadata.get("content_type")
+    if not isinstance(content_type, str):
+        raise ValueError(f"missing content_type metadata for {handle}")
+    return content_type
+
+
+def _tree_children(handle: str) -> list[str]:
+    """Read raw child handles from a tree handle."""
+    raw = runtime._kvfold_path(suffix(handle, TREE_PREFIX)).read_bytes()
+    children = json.loads(raw.decode("utf-8"))
+    if not isinstance(children, list):
+        raise ValueError(f"tree handle does not contain a list: {handle}")
+    return [str(child) for child in children]
 
 
 async def main() -> None:

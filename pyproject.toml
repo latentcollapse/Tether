@@ -15,6 +15,8 @@ dependencies = [
     "uvicorn>=0.30.0",
     "bcrypt>=4.0.0",
     "pynacl>=1.5.0",
+    "spake2>=0.9",
+    "argon2-cffi>=25.1.0",
 ]
 
 [project.scripts]

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tether — AI agent coordination protocol</title>
+  <style>
+    /* Reset & Base Setup */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #05060a;
+      color: #e0e6ed;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    a {
+      text-decoration: none;
+      color: inherit;
+    }
+
+    /* Typography & Colors */
+    .text-primary { color: #e0e6ed; }
+    .text-subtle { color: #8892b0; }
+    .text-neon { color: #00f2ff; }
+    .bg-elevated { background-color: #0f111a; }
+    .border-subtle { border: 1px solid rgba(255, 255, 255, 0.08); }
+    
+    /* Helpers */
+    .glow {
+      box-shadow: 0 0 10px #00f2ff;
+    }
+    .glow-hover:hover {
+      box-shadow: 0 0 20px #00f2ff;
+    }
+
+    /* Nav */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 70px;
+      background: rgba(5, 6, 10, 0.9);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2rem;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 600;
+      font-size: 1.1rem;
+      letter-spacing: 0.05em;
+    }
+    .logo-ring {
+      width: 16px;
+      height: 16px;
+      border: 3px solid #00f2ff;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #00f2ff;
+    }
+    .nav-links {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+    }
+    .nav-links a {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #8892b0;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover {
+      color: #e0e6ed;
+    }
+    .btn-primary {
+      background: rgba(0, 242, 255, 0.1);
+      border: 1px solid #00f2ff;
+      color: #00f2ff;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: all 0.2s;
+      display: inline-block;
+      text-align: center;
+    }
+    .btn-primary:hover {
+      background: rgba(0, 242, 255, 0.2);
+      box-shadow: 0 0 15px rgba(0, 242, 255, 0.4);
+      color: #00f2ff;
+    }
+    .btn-solid {
+      background: #00f2ff;
+      color: #05060a;
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: all 0.2s;
+      display: inline-block;
+      border: none;
+      box-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
+      cursor: pointer;
+    }
+    .btn-solid:hover {
+      box-shadow: 0 0 25px rgba(0, 242, 255, 0.6);
+      background: #00d1d1;
+    }
+
+    /* Hero */
+    .hero {
+      position: relative;
+      padding: 160px 2rem 100px;
+      text-align: center;
+      min-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #network-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      max-width: 800px;
+    }
+    .hero h1 {
+      font-size: 4.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.5rem;
+      line-height: 1.1;
+      background: linear-gradient(to right, #ffffff, #8892b0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    @media(max-width: 768px) {
+      .hero h1 { font-size: 3rem; }
+    }
+    .hero p {
+      font-size: 1.25rem;
+      color: #8892b0;
+      margin-bottom: 2.5rem;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .hero-ctas {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      align-items: center;
+    }
+    @media(max-width: 600px) {
+      .hero-ctas {
+        flex-direction: column;
+        width: 100%;
+      }
+      .hero-ctas a {
+        width: 100%;
+      }
+    }
+
+    /* Sections */
+    section {
+      padding: 100px 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section-title {
+      text-align: center;
+      font-size: 2.5rem;
+      margin-bottom: 4rem;
+      font-weight: 600;
+    }
+
+    /* Cards */
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 2rem;
+    }
+    .card {
+      background: #0f111a;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 2.5rem;
+      transition: transform 0.3s, border-color 0.3s;
+    }
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(0, 242, 255, 0.3);
+    }
+    .card h3 {
+      font-size: 1.5rem;
+      color: #e0e6ed;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .card h3 .icon {
+      color: #00f2ff;
+    }
+    .card p {
+      color: #8892b0;
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    /* Pricing Table */
+    .pricing-table-container {
+      overflow-x: auto;
+    }
+    .pricing-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 3rem;
+      background: #0f111a;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .pricing-table th, .pricing-table td {
+      padding: 1.5rem;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .pricing-table th {
+      font-weight: 600;
+      color: #e0e6ed;
+      font-size: 1.1rem;
+      min-width: 140px;
+    }
+    .pricing-table th.highlight {
+      color: #00f2ff;
+    }
+    .pricing-table td {
+      color: #8892b0;
+    }
+    .pricing-table tr:last-child th,
+    .pricing-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .pricing-ctas {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+    }
+    @media(max-width: 600px) {
+      .pricing-ctas {
+        flex-direction: column;
+        width: 100%;
+      }
+      .pricing-ctas a {
+        width: 100%;
+      }
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 3rem 2rem;
+      text-align: center;
+      color: #8892b0;
+      font-size: 0.9rem;
+    }
+    footer a {
+      color: #e0e6ed;
+    }
+    footer a:hover {
+      color: #00f2ff;
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <a href="#" class="logo">
+      <div class="logo-ring"></div>
+      TETHER
+    </a>
+    <div class="nav-links">
+      <a href="https://github.com/HLX-Lang/Tether">GitHub</a>
+      <a href="#pricing" class="btn-primary">Get Started</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <canvas id="network-canvas"></canvas>
+    <div class="hero-content">
+      <h1>AI agents need a nervous system.</h1>
+      <p>Tether is the coordination protocol — MCP-native, LLM-agnostic, relay-blind. Free forever for local use.</p>
+      <div class="hero-ctas">
+        <a href="https://github.com/HLX-Lang/Tether" class="btn-primary">Download TetherLite</a>
+        <a href="#pricing" class="btn-solid">Get Teams Access</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- How it works -->
+  <section id="how-it-works">
+    <h2 class="section-title">How it works</h2>
+    <div class="grid-3">
+      <div class="card">
+        <h3><span class="icon">↓</span> Collapse</h3>
+        <p>Any arbitrary JSON payload or file is hashed via BLAKE3 down to a deterministic 12-character handle (e.g., <code>h&amp;l_messages_abc123456789</code>).</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon">→</span> Route</h3>
+        <p>The Tether relay delivers these handles between agents across machines. The relay is entirely blind to the content of the handle.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon">↑</span> Resolve</h3>
+        <p>When the recipient is ready, they resolve the handle locally through the database to retrieve the full, uncompressed content.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Who it's for -->
+  <section id="audiences">
+    <h2 class="section-title">Built for the Swarm</h2>
+    <div class="grid-2">
+      <div class="card">
+        <h3 style="color:#e0e6ed">Developers / Indie Hackers</h3>
+        <p style="margin-bottom: 1.5rem;">TetherLite is the local version. It is totally free, permanently open-source, and runs purely on local SQLite.</p>
+        <ul style="color:#8892b0; list-style: none; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.95rem;">
+          <li>✓ 100% Free forever</li>
+          <li>✓ Unlimited tethered CLI REPLs per node</li>
+          <li>✓ Run Claude, Codex, Gemini simultaneously</li>
+        </ul>
+      </div>
+      <div class="card" style="border-color: rgba(0, 242, 255, 0.3);">
+        <h3 style="color:#00f2ff">Teams, Startups &amp; Enterprise</h3>
+        <p style="margin-bottom: 1.5rem;">Scales seamlessly from 2 nodes up to massive multi-agent enterprise deployments over WAN.</p>
+        <ul style="color:#8892b0; list-style: none; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.95rem;">
+          <li>✓ Cross-machine capabilities</li>
+          <li>✓ Hosted relay infrastructure</li>
+          <li>✓ Centralized dashboard access</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section id="pricing">
+    <h2 class="section-title">Pricing</h2>
+    <div class="pricing-table-container">
+      <table class="pricing-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Free</th>
+            <th>Duo</th>
+            <th class="highlight">Teams</th>
+            <th>Pro</th>
+            <th>Enterprise</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>Price</th>
+            <td>$0 forever</td>
+            <td><strong style="color: #e0e6ed">$1.99</strong> /mo</td>
+            <td><strong style="color: #e0e6ed">$10</strong> /mo</td>
+            <td><strong style="color: #e0e6ed">$100</strong> /mo</td>
+            <td>Contact us</td>
+          </tr>
+          <tr>
+            <th>Agents</th>
+            <td>Unlimited local</td>
+            <td>2 relay nodes</td>
+            <td>Up to 10 nodes</td>
+            <td>Up to 100 nodes</td>
+            <td>Unlimited</td>
+          </tr>
+          <tr>
+            <th>Network</th>
+            <td>Local machine</td>
+            <td>LAN / WAN</td>
+            <td>Cross-machine WAN</td>
+            <td>Cross-machine WAN</td>
+            <td>Cross-machine WAN</td>
+          </tr>
+          <tr>
+            <th>Backend</th>
+            <td>Pure SQLite</td>
+            <td>Hosted relay</td>
+            <td>Hosted relay</td>
+            <td>Hosted relay</td>
+            <td>Self-hosted license</td>
+          </tr>
+          <tr>
+            <th>Support</th>
+            <td>GitHub</td>
+            <td>Community</td>
+            <td>Email</td>
+            <td>Priority</td>
+            <td>Dedicated channel</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pricing-ctas">
+      <a href="https://github.com/HLX-Lang/Tether" class="btn-primary">Start Free — GitHub</a>
+      <a href="https://buy.stripe.com/test_placeholder" class="btn-solid">Get Access — Stripe</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>Built by Matt Cohn · <a href="/">tether.dev</a> · AGPL-3.0</p>
+    <p style="margin-top: 0.5rem;"><a href="https://github.com/HLX-Lang/Tether">View Source on GitHub</a></p>
+  </footer>
+
+  <!-- Script for Canvas Background Array -->
+  <script>
+    const canvas = document.getElementById('network-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    let width, height;
+    let nodes = [];
+    const NUM_NODES = 60;
+    const MAX_DIST = 150;
+
+    function resize() {
+      width = canvas.width = canvas.offsetWidth;
+      height = canvas.height = canvas.offsetHeight;
+    }
+    
+    window.addEventListener('resize', resize);
+    resize();
+
+    for(let i=0; i<NUM_NODES; i++) {
+      nodes.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5
+      });
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+      
+      for(let i=0; i<nodes.length; i++) {
+        let n1 = nodes[i];
+        
+        n1.x += n1.vx;
+        n1.y += n1.vy;
+        
+        if(n1.x < 0 || n1.x > width) n1.vx *= -1;
+        if(n1.y < 0 || n1.y > height) n1.vy *= -1;
+        
+        ctx.beginPath();
+        ctx.arc(n1.x, n1.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#00f2ff';
+        ctx.fill();
+
+        for(let j=i+1; j<nodes.length; j++) {
+          let n2 = nodes[j];
+          let dist = Math.sqrt(Math.pow(n1.x - n2.x, 2) + Math.pow(n1.y - n2.y, 2));
+          
+          if(dist < MAX_DIST) {
+            ctx.beginPath();
+            ctx.moveTo(n1.x, n1.y);
+            ctx.lineTo(n2.x, n2.y);
+            ctx.strokeStyle = `rgba(0, 242, 255, ${1 - dist/MAX_DIST})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+      }
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
+

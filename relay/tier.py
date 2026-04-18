@@ -46,7 +46,7 @@ DEFAULT_CONFIGS: dict[Tier, TierConfig] = {
     Tier.TEAMS: TierConfig(
         max_agents=10,
         max_msg_per_day=5000,
-        features=TierFeatures(encrypted_envelopes=False, pake_wan=False),
+        features=TierFeatures(encrypted_envelopes=False, pake_wan=True),
     ),
     Tier.ENTERPRISE: TierConfig(
         max_agents=-1,

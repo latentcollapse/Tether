@@ -91,3 +91,20 @@ class HandlePush(BaseModel):
     timestamp: str
 
     model_config = {"populate_by_name": True}
+
+
+class RendezvousSessionRequest(BaseModel):
+    addr: str = Field(min_length=1)
+
+
+class RendezvousSessionCreateResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
+class RendezvousPeerResponse(BaseModel):
+    peer_addr: str
+
+
+class RendezvousWaitingResponse(BaseModel):
+    status: str

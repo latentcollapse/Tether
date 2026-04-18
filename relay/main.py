@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from . import auth
 from .config import get_config
 from .db import RelayDB
-from .routers import admin, agents, handles, keys, ws
+from .routers import admin, agents, handles, keys, rendezvous, ws
 
 logger = logging.getLogger(__name__)
 
@@ -37,4 +37,5 @@ app.include_router(admin.router)
 app.include_router(agents.router)
 app.include_router(handles.router)
 app.include_router(keys.router)
+app.include_router(rendezvous.router)
 app.include_router(ws.router)

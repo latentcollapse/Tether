@@ -69,3 +69,13 @@ class E_HANDLE_EXPIRED(TetherError):
 class E_ACCESS_DENIED(TetherError):
     """Handle is owned by a different agent."""
     pass
+
+
+class E_PAKE_AUTH_FAILED(TetherError):
+    """Passphrase-authenticated key exchange failed."""
+    pass
+
+
+class E_PAKE_PROTOCOL(TetherError):
+    """Passphrase channel protocol error."""
+    pass

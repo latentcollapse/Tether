@@ -64,6 +64,9 @@ class SQLiteRuntime:
                 expires_at TIMESTAMP NULL,
                 owner TEXT NULL,
                 tags TEXT NULL,
+                sender TEXT NULL,
+                status TEXT DEFAULT 'open',
+                ticket_id TEXT NULL,
                 FOREIGN KEY (table_name) REFERENCES tether_tables(table_name)
             )
         """)
@@ -86,6 +89,18 @@ class SQLiteRuntime:
         # Migration for sender
         try:
             self._conn.execute("ALTER TABLE tether_handles ADD COLUMN sender TEXT NULL")
+        except sqlite3.OperationalError:
+            pass
+
+        # Migration for status (T-001)
+        try:
+            self._conn.execute("ALTER TABLE tether_handles ADD COLUMN status TEXT DEFAULT 'open'")
+        except sqlite3.OperationalError:
+            pass
+
+        # Migration for ticket_id (T-001)
+        try:
+            self._conn.execute("ALTER TABLE tether_handles ADD COLUMN ticket_id TEXT NULL")
         except sqlite3.OperationalError:
             pass
 
@@ -139,7 +154,7 @@ class SQLiteRuntime:
     
     def collapse(self, table: str | Any, value: Any = _MISSING, ttl_seconds: Optional[int] = None,
                  owner: Optional[str] = None, tags: Optional[List[str]] = None,
-                 sender: Optional[str] = None) -> str:
+                 sender: Optional[str] = None, ticket_id: Optional[str] = None) -> str:
         """Collapse a value into a handle."""
         if value is _MISSING:
             return self.collapse_inline(table)
@@ -163,9 +178,9 @@ class SQLiteRuntime:
         tags_str = ",".join(tags) if tags else None
 
         self._conn.execute(
-            "INSERT OR REPLACE INTO tether_handles (handle, table_name, lc_bytes, expires_at, owner, tags, sender) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (handle, table, lc_bytes, expires_at, owner, tags_str, sender)
+            "INSERT OR REPLACE INTO tether_handles (handle, table_name, lc_bytes, expires_at, owner, tags, sender, status, ticket_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+            (handle, table, lc_bytes, expires_at, owner, tags_str, sender, ticket_id)
         )
         self._conn.commit()
         return handle
@@ -264,10 +279,38 @@ class SQLiteRuntime:
         )
         self._conn.commit()
 
+    def close_handle(self, handle: Optional[str] = None, ticket_id: Optional[str] = None, 
+                     status: str = 'completed', reason: Optional[str] = None):
+        """Update the status of a handle or all open handles for a ticket (T-001/T-002)."""
+        if handle:
+            self._conn.execute(
+                "UPDATE tether_handles SET status = ? WHERE handle = ?",
+                (status, handle)
+            )
+        elif ticket_id:
+            self._conn.execute(
+                "UPDATE tether_handles SET status = ? WHERE ticket_id = ? AND status = 'open'",
+                (status, ticket_id)
+            )
+        self._conn.commit()
+
+    def auto_stale_messages(self, agent: str):
+        """Mark unread messages older than 48h as stale (T-001)."""
+        self._conn.execute("""
+            UPDATE tether_handles 
+            SET status = 'stale' 
+            WHERE table_name = 'messages' 
+              AND owner = ? 
+              AND status = 'open' 
+              AND created_at < datetime('now', '-48 hours')
+              AND handle NOT IN (SELECT handle FROM tether_reads WHERE agent = ?)
+        """, (agent, agent))
+        self._conn.commit()
+
     def metadata(self, handle: str, for_agent: Optional[str] = None) -> Dict[str, Any]:
         """Get metadata for a handle, including read status."""
         cursor = self._conn.execute(
-            "SELECT h.table_name, h.created_at, h.expires_at, h.owner, h.tags, r.read_at "
+            "SELECT h.table_name, h.created_at, h.expires_at, h.owner, h.tags, h.status, h.ticket_id, r.read_at "
             "FROM tether_handles h "
             "LEFT JOIN tether_reads r ON h.handle = r.handle AND r.agent = ? "
             "WHERE h.handle = ?",
@@ -284,15 +327,20 @@ class SQLiteRuntime:
             "expires_at": row["expires_at"],
             "owner": row["owner"],
             "tags": row["tags"].split(",") if row["tags"] else [],
+            "status": row["status"],
+            "ticket_id": row["ticket_id"],
             "read": row["read_at"] is not None,
             "read_at": row["read_at"]
         }
     
-    def snapshot(self, table: str, tag: Optional[str] = None) -> Dict[str, Any]:
+    def snapshot(self, table: str, tag: Optional[str] = None, include_closed: bool = True) -> Dict[str, Any]:
         """Get all non-expired handles and values in a table."""
         query = "SELECT handle, lc_bytes FROM tether_handles WHERE table_name = ? AND (expires_at IS NULL OR expires_at > datetime('now'))"
         params = [table]
         
+        if not include_closed:
+            query += " AND status = 'open'"
+
         if tag:
             query += " AND tags LIKE ?"
             params.append(f"%{tag}%")

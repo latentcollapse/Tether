@@ -1,0 +1,388 @@
+# Tether Job Board (TOML)
+# Master task source for the Tether project.
+# Tether is the coordination layer for the future of AI communicative infrastructure.
+#
+# Tiers: red = blocking/critical, orange = high value, yellow = polish/infra, blue = docs, green = maintenance
+# Status: open | in_progress | complete | dormant | cancelled
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCT ARCHITECTURE REFERENCE
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# TetherLite   — Free, AGPL. SQLite local. No relay. No caps. The full local protocol.
+#                This is the hook. Nobody ever loses this.
+#
+# Tether Cloud — SaaS. Relay server, API keys, WebSocket push, cross-machine
+#                delivery, agent discovery, GUI dashboard. Coordination only —
+#                relay routes handles, never stores or sees content. AGPL relay source
+#                stays open — "relay-blind" is a trust claim that requires auditability.
+#
+# Same protocol, same handle format, same MCP tool names across both.
+# Code written for TetherLite works on Tether Cloud. Upgrade = change endpoint + pay.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PRICING
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Free (TetherLite)  — SQLite local, unlimited agents, unlimited messages. No relay. No caps. Ever.
+#                      The full local coordination layer. WinRAR model — this never disappears.
+#
+# Duo ($1.99/mo)     — + PAKE passphrase P2P. You and a buddy, direct encrypted channel.
+#                      LAN: zero infra, pure P2P. WAN: our STUN server assists NAT traversal only
+#                      (never sees content). The "dev tag team" tier.
+#
+# Basic ($10/mo)     — + hosted relay, up to 10 cross-machine nodes. Each node can connect
+#                      unlimited local agents. WebSocket push, agent discovery.
+#                      Hosted on brother's server.
+#
+# Pro ($100/mo)      — + up to 100 nodes. Small companies, large teams. Same feature set as
+#                      Basic, bigger network ceiling.
+#
+# Enterprise (custom) — Self-hosted relay license. Their infra, our software.
+#                       For regulated industries that can't route agent traffic through our relay.
+#                       Contact Matt. No other option.
+#
+# What the paywall is: cross-machine reach. Nothing else.
+# Local coordination (SQLite, unlimited agents, unlimited messages) is always free.
+#
+# Licensing: TetherLite = AGPL (relay too — open source is the trust anchor for "relay-blind").
+#            Tether Cloud = hosted service. Software is open. Convenience is not.
+#
+# The pitch: "Are you sick of pasting JSON blobs like I was?"
+# Distribution: OpenClaw upstream contribution + Tether Cloud relay as the upgrade path.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 1 — TETHERLITE (Foundation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 — RELAY SERVER (Self-Hosted, AGPL)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 3 — BLOB ROUTING (KVFold integration)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 4 — GUI DASHBOARD (Tether Cloud frontend)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[ticket]]
+id = "T-043"
+title = "Dashboard — Settings View"
+status = "open"
+tier = "yellow"
+area = ["frontend", "dashboard"]
+assignee = "unassigned"
+opened = "2026-04-17"
+# New Settings nav item in sidebar. Controls for the local Tether runtime.
+# Autoping toggle — flip on = autonomous mode, agents wake each other on activity
+# Stale threshold — TETHER_STALE_HOURS, slider or number input, default 24h
+# Backend selector — TetherLite (TOML) vs Relay, relay URL field appears when relay selected
+# Admin key — paste TETHER_ADMIN_KEY to unlock admin controls in dashboard
+# All settings persist to localStorage. Applied on next page load.
+# No backend call needed — settings are client-side config for the dashboard itself.
+# Gemini GAIS ticket — paste this spec into the prompt window.
+
+[[ticket]]
+id = "T-044"
+title = "Dashboard — Upgrade Flow (Stripe CTA)"
+status = "open"
+tier = "yellow"
+area = ["frontend", "dashboard", "billing"]
+assignee = "unassigned"
+opened = "2026-04-17"
+# Surface the upgrade path from inside the dashboard. Two entry points:
+#
+# 1. Tier pill in header (already shows "Indie Tier" / "Free" etc.)
+#    - Free tier: pill is grey, clickable, opens upgrade modal
+#    - Teams tier: pill is cyan, clickable, opens "Manage Subscription" → Stripe customer portal URL
+#
+# 2. Usage view — when approaching limits (>80% of msg/day or agent count):
+#    - Banner: "You're at 8/10 agents. Upgrade to Enterprise for unlimited."
+#    - "Upgrade" button → Stripe checkout link
+#
+# Upgrade modal (Free → Teams):
+#    - One card: Teams $10/mo — list of features
+#    - "Get Teams Access" button → opens TETHER_STRIPE_CHECKOUT_URL in new tab
+#    - Small print: "You'll be redirected to Stripe. Nothing is stored on our servers."
+#
+# Env var: TETHER_STRIPE_CHECKOUT_URL (placeholder until Stripe is configured)
+# Env var: TETHER_STRIPE_PORTAL_URL (for existing Teams customers to manage sub)
+# No custom payment code. All payment handling is Stripe's problem.
+# Gemini GAIS ticket — small addition to existing dashboard.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 5 — OPENCLAW INTEGRATION (Primary distribution target)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[ticket]]
+id = "T-053"
+title = "OpenClaw Socket — Tether Cloud Bridge"
+status = "open"
+tier = "red"
+area = ["openclaw", "relay"]
+assignee = "unassigned"
+opened = "2026-04-17"
+# WebSocket bridge between Tether Cloud relay and OpenClaw runtime.
+# OpenClaw agent registers with Tether Cloud via API key.
+# Handles delivered to OpenClaw agent in real time via WebSocket push.
+# OpenClaw plugin: tether_send, tether_receive, tether_inbox as native commands.
+# Demo script: two OpenClaw agents on different machines exchange handles via relay.
+# This is the upgrade path from TetherLite → Tether Cloud for OpenClaw users.
+# RunLobster's infra + Tether Cloud relay = natural infrastructure partnership conversation.
+
+[[ticket]]
+id = "T-052"
+title = "Cross-Machine Demo — The Pitch Moment"
+status = "open"
+tier = "red"
+area = ["openclaw", "demo"]
+assignee = "unassigned"
+opened = "2026-04-17"
+# Two machines, two agents (e.g. claude@machine-a, codex@machine-b).
+# Scenario: junior agent hits a problem, packages context as handle, sends via relay.
+# Senior agent receives via WebSocket push, resolves, responds with solution handle.
+# Junior agent receives, continues. Humans barely involved.
+# Total latency target: < 1 second end-to-end.
+# Recorded demo video + live runnable script.
+# "I was sick of pasting JSON blobs between LLMs" — this demo is the proof.
+# Required for pitch to brother and Charlotte.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 6 — MANAGER HARNESS (Self-operating infrastructure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[ticket]]
+id = "T-060"
+title = "Manager HLX Harness — Self-Operating Relay Infrastructure"
+status = "dormant"
+tier = "red"
+area = ["hlx", "automation"]
+assignee = "unassigned"
+opened = "2026-04-17"
+blocked_by = ["T-020", "T-021", "T-051"]
+# HLX harness that learns to operate the Tether Cloud relay infrastructure automatically.
+# Monitors relay health, rotates stale keys, manages tier enforcement, flags anomalies.
+# Stores operational memory via KVFold. Improves each session — same RSI compounding as Bitsy.
+# Goal: turn-key self-operating SaaS. Founder doesn't need to babysit the infrastructure.
+# This is the business moat: not just automation, but a harness that gets better at ops over time.
+# Start after relay is stable and cross-machine demo is working.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 7 — WEBSITE + BILLING (Launch surface)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[ticket]]
+id = "T-070"
+title = "Website — Landing Page + Docs"
+status = "dormant"
+tier = "orange"
+area = ["marketing", "docs"]
+assignee = "unassigned"
+opened = "2026-04-17"
+# Not needed until OpenClaw integration is live and domain is purchased.
+# Design assets already generated (Gemini GAIS — 3 landing page variants ready).
+# Content: what Tether is, TetherLite vs Cloud, pricing table, CTA.
+# /docs: full API reference + self-host guide + protocol spec + security model page.
+# Honest security page: what Tether Cloud holds (handles + metadata) vs what it doesn't (blobs).
+# "Start for free" → TetherLite GitHub. "Start Tethering" → Cloud signup.
+# Built by Gemini GAIS from a spec. Hosted on domain (TBD).
+
+[[ticket]]
+id = "T-071"
+title = "Stripe Integration — Subscription Billing"
+status = "dormant"
+tier = "orange"
+area = ["billing", "relay"]
+assignee = "unassigned"
+opened = "2026-04-17"
+blocked_by = ["T-022"]
+# Stripe Checkout for Pro and Teams tiers.
+# Webhook: subscription.created / updated / deleted → update tier in relay DB.
+# Customer portal: self-serve plan changes, cancellation.
+# Free tier: no card required, limited to local TetherLite.
+# Pricing page links to Stripe Checkout. No custom billing code.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGELOG (Historical — migrated from HLX_JOB_BOARD.toml)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[changelog]]
+id = "T-000"
+title = "Autoping Dynamic Pane Lookup"
+status = "complete"
+tier = "green"
+closed = "2026-04-16"
+fix = "Resolved panes at inject-time via regex heuristics."
+
+[[changelog]]
+id = "T-001"
+title = "Message Lifecycle State"
+status = "complete"
+tier = "green"
+closed = "2026-04-16"
+fix = "Added status/ticket_id columns and tether_close tool."
+
+[[changelog]]
+id = "T-002"
+title = "TOML Job Board + Tether Bridge"
+status = "complete"
+tier = "yellow"
+closed = "2026-04-16"
+fix = "Converted HLX board to TOML and launched watchdog bridge."
+
+[[changelog]]
+id = "T-003"
+title = "Handle Prune + Archive Scripts"
+status = "complete"
+tier = "yellow"
+closed = "2026-04-17"
+fix = "scripts/prune.py (configurable threshold, archive before delete), scripts/import.py (restore stub from archive), scripts/archive.md (append-only log)."
+
+[[changelog]]
+id = "T-010"
+title = "TetherLite — TOML Backing Store"
+status = "complete"
+tier = "red"
+closed = "2026-04-17"
+assignee = "codex"
+fix = "tether_lite/ package: runtime.py + mcp_server.py. TOML files per message, no SQLite. Full MCP surface. 8 tests passing."
+
+[[changelog]]
+id = "T-011"
+title = "Unified Handle Scheme — inline/blob/tree prefixes"
+status = "complete"
+tier = "red"
+closed = "2026-04-17"
+assignee = "codex"
+fix = "h&l_inline_, h&l_blob_, h&l_tree_ prefixes in both runtimes. KVFold integration. tether_contracts.json updated. 19 tests passing."
+
+[[changelog]]
+id = "T-012"
+title = "TetherLite — Prune Script + Archive"
+status = "complete"
+tier = "yellow"
+closed = "2026-04-17"
+assignee = "claude"
+fix = "scripts/prune.py, scripts/import.py, scripts/archive.md. Changelog v1.8 written."
+
+[[changelog]]
+id = "T-013"
+title = "TetherLite — Passphrase P2P Connection (SPAKE2)"
+status = "complete"
+tier = "orange"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Argon2id + SPAKE2 passphrase channel in tether_lite/pake.py with explicit key confirmation, SecretBox encryption, CLI connect/listen commands, and 17 passing tests."
+
+[[changelog]]
+id = "T-013b"
+title = "PAKE WAN — Relay Rendezvous Endpoint"
+status = "complete"
+tier = "orange"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Added relay rendezvous session routes plus WAN PAKE helpers and CLI wiring in tether_lite. Duo-gated endpoint exchange, no relay access to passphrase or payload, 20 passing tests."
+
+[[changelog]]
+id = "T-020"
+title = "Relay Server — Core (FastAPI + WebSocket)"
+status = "complete"
+tier = "red"
+closed = "2026-04-17"
+assignee = "codex"
+fix = "relay/ package: agents, handles, ws routers. SQLite registry. Bearer auth. WebSocket push + offline queue. 4 tests passing."
+
+[[changelog]]
+id = "T-021"
+title = "API Key Management — Issue, Scope, Rotate, Revoke"
+status = "complete"
+tier = "red"
+closed = "2026-04-17"
+assignee = "codex"
+fix = "relay/routers/keys.py. Atomic rotation, per-key rate limiting (429 + Retry-After), owner-scoped revoke. 10 tests passing."
+
+[[changelog]]
+id = "T-022"
+title = "Subscription Tier Enforcement"
+status = "complete"
+tier = "orange"
+closed = "2026-04-17"
+assignee = "codex"
+fix = "relay/tier.py: Free/Teams/Enterprise enum. Agent + message limits. WS gating. Admin route (TETHER_ADMIN_KEY). Enterprise env overrides. 16 tests passing."
+
+[[changelog]]
+id = "T-023"
+title = "Encrypted Envelopes — Teams+ tier"
+status = "complete"
+tier = "orange"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Encrypted envelope support, relay pubkey registration, enterprise-gated pubkey exposure, crypto MCP tools, and dashboard launcher wiring. 28 passing tests across relay/tether/tether_lite."
+
+[[changelog]]
+id = "T-030"
+title = "KVFold Blob Routing — MCP tools + Handle Browser wiring"
+status = "complete"
+tier = "orange"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Added blob/tree MCP tools in both runtimes and wired the dashboard Handle Browser to resolve inline, blob, tree, and missing handles cleanly. 8 passing MCP tests."
+
+[[changelog]]
+id = "T-040"
+title = "Dashboard Frontend — React/TypeScript"
+status = "complete"
+tier = "red"
+closed = "2026-04-17"
+assignee = "gemini"
+fix = "tether-dashboard/: 6 views (Login, Network, Messages, Connection, Handles, Usage). React 19 + TypeScript + Vite + Tailwind + React Flow + Recharts + Zustand + Framer Motion. 250KB total."
+
+[[changelog]]
+id = "T-041"
+title = "Dashboard — Messages Inbox View"
+status = "complete"
+tier = "orange"
+closed = "2026-04-17"
+assignee = "gemini"
+fix = "Gmail-style inbox/compose tabs. Unread badge, thread expand, handle display, relative timestamps."
+
+[[changelog]]
+id = "T-042"
+title = "Dashboard — Agent Network Graph"
+status = "complete"
+tier = "orange"
+closed = "2026-04-17"
+assignee = "gemini"
+fix = "React Flow network graph. TetherLite/Tether header pill. Admin star badge. Animated traffic edges. Register agent tab."
+
+[[changelog]]
+id = "T-050"
+title = "OpenClaw Integration — TetherLite Upstream Contribution"
+status = "complete"
+tier = "red"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Bundled tether/tether_lite into openclaw-main, added the Tether skill, first-run setup script, onboarding hook, and docs/env updates. Local checkout only; not committed because openclaw-main was not a Git repo here."
+
+[[changelog]]
+id = "T-051"
+title = "tether dashboard — CLI launch command + dynamic port"
+status = "complete"
+tier = "yellow"
+closed = "2026-04-18"
+assignee = "codex"
+fix = "Added python -m tether_lite dashboard launcher with dynamic port selection and OpenClaw alias wiring. Missing-build path now cleanly instructs npm run build first."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUTURE DIRECTIONS (not ticketed yet)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# ABI / Language Embedding — formalize Tether as a linkable interface:
+#   - tether.h C header: tether_send/receive/collapse/resolve via FFI
+#   - tether.wasm: compile core runtime to WASM, embed anywhere
+#   - OpenAPI spec (already implicit in FastAPI relay) → auto-generate clients
+#     for Go, Rust, TypeScript, Java, etc.
+#   - C FFI route (.so) is the power move for truly native embedding
+#   - Probably T-120-ish when someone actually needs it

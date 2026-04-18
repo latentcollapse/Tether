@@ -1,18 +1,23 @@
 """Tether MCP Server - Model Context Protocol integration for Tether."""
 
 import asyncio
+import base64
 import json
+import logging
 import os
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 # Ensure tether package is importable when run as a script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tether import SQLiteRuntime
 from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
+from tether.handles import BLOB_PREFIX, TREE_PREFIX, suffix
 from tether.exceptions import TetherError
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -30,6 +35,7 @@ runtime = SQLiteRuntime(db_path)
 
 
 server = Server("tether")
+logger = logging.getLogger(__name__)
 
 
 NOTIFY_FILE = os.path.expanduser("~/.tether_notify")
@@ -131,6 +137,55 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="tether_collapse_blob",
+            description="Base64-decode bytes, store them as a blob handle, and return the handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bytes_b64": {"type": "string", "description": "Base64-encoded blob bytes"},
+                    "content_type": {"type": "string", "description": "Blob content type"}
+                },
+                "required": ["bytes_b64", "content_type"]
+            }
+        ),
+        Tool(
+            name="tether_resolve_blob",
+            description="Resolve a blob handle to base64 bytes and content type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Blob handle"}
+                },
+                "required": ["handle"]
+            }
+        ),
+        Tool(
+            name="tether_collapse_tree",
+            description="Store an ordered list of child handles as a tree handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered child handles"
+                    }
+                },
+                "required": ["handles"]
+            }
+        ),
+        Tool(
+            name="tether_resolve_tree",
+            description="Resolve a tree handle to its ordered child handles.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Tree handle"}
+                },
+                "required": ["handle"]
+            }
+        ),
+        Tool(
             name="tether_collapse",
             description="Collapse a JSON value into a deterministic handle. Use this to compress data for transfer between LLMs. Supports optional tagging.",
             inputSchema={
@@ -228,7 +283,11 @@ async def list_tools() -> list[Tool]:
                     "from_agent": {
                         "type": "string",
                         "description": "Sender name",
-                        "default": "kilo"
+                        "default": "unknown"
+                    },
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "Optional ticket ID associated with this message"
                     },
                     "tags": {
                         "type": "array",
@@ -252,9 +311,40 @@ async def list_tools() -> list[Tool]:
                     "for_agent": {
                         "type": "string",
                         "description": "Agent name to check messages for (e.g., 'kilo', 'opus')"
+                    },
+                    "include_closed": {
+                        "type": "boolean",
+                        "description": "Whether to include closed/stale messages (default false)",
+                        "default": False
                     }
                 },
                 "required": ["for_agent"]
+            }
+        ),
+        Tool(
+            name="tether_close",
+            description="Close a message (by handle) or all open messages for a ticket (by ticket_id).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {
+                        "type": "string",
+                        "description": "Optional: Message handle to close"
+                    },
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "Optional: Ticket ID to close all open messages for"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "New status (completed, superseded, cancelled, stale)",
+                        "default": "completed"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for closing"
+                    }
+                }
             }
         ),
         Tool(
@@ -320,7 +410,7 @@ async def list_tools() -> list[Tool]:
                     "to": {"type": "string", "description": "Recipient agent name"},
                     "subject": {"type": "string", "description": "Message subject"},
                     "text": {"type": "string", "description": "Message body"},
-                    "from_agent": {"type": "string", "description": "Sender name (defaults to 'kilo')", "default": "kilo"}
+                    "from_agent": {"type": "string", "description": "Sender name (defaults to 'unknown')", "default": "unknown"}
                 },
                 "required": ["thread", "to", "subject", "text"]
             }
@@ -471,6 +561,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             payload = resolve_encrypted(arguments["handle"], arguments["private_key"])
             return [TextContent(type="text", text=json.dumps({"payload": payload}))]
 
+        elif name == "tether_collapse_blob":
+            blob_bytes = _decode_b64(str(arguments["bytes_b64"]), "bytes_b64")
+            handle = runtime.collapse_blob(blob_bytes, str(arguments["content_type"]))
+            return [TextContent(type="text", text=json.dumps({"handle": handle}))]
+
+        elif name == "tether_resolve_blob":
+            handle = str(arguments["handle"])
+            if not handle.startswith(BLOB_PREFIX):
+                raise ValueError("handle must start with h&l_blob_")
+            blob_bytes = runtime.resolve(handle)
+            if not isinstance(blob_bytes, bytes):
+                raise ValueError(f"blob handle did not resolve to bytes: {handle}")
+            return [TextContent(
+                type="text",
+                text=json.dumps({"bytes_b64": _encode_b64(blob_bytes), "content_type": _blob_content_type(handle)})
+            )]
+
+        elif name == "tether_collapse_tree":
+            handles = [str(handle) for handle in arguments["handles"]]
+            handle = runtime.collapse_tree(handles)
+            return [TextContent(type="text", text=json.dumps({"handle": handle}))]
+
+        elif name == "tether_resolve_tree":
+            handle = str(arguments["handle"])
+            if not handle.startswith(TREE_PREFIX):
+                raise ValueError("handle must start with h&l_tree_")
+            return [TextContent(type="text", text=json.dumps({"handles": _tree_children(handle)}))]
+
         elif name == "tether_collapse":
             handle = runtime.collapse(
                 arguments["table"], 
@@ -524,7 +642,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
                 owner=arguments["to"],
                 tags=arguments.get("tags"),
-                sender=arguments.get("from_agent")
+                sender=arguments.get("from_agent"),
+                ticket_id=arguments.get("ticket_id")
             )
             result = {"handle": handle, "status": "sent", "to": arguments["to"], "subject": arguments["subject"]}
             if ttl_seconds is not None:
@@ -542,15 +661,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         elif name == "tether_inbox":
             for_agent = arguments["for_agent"]
-            snapshot = runtime.snapshot("messages")
+            include_closed = arguments.get("include_closed", False)
+            
+            # Auto-stale check (T-001)
+            runtime.auto_stale_messages(for_agent)
+
+            snapshot = runtime.snapshot("messages", include_closed=include_closed)
             inbox = []
             for handle, msg in snapshot.items():
                 if isinstance(msg, dict) and msg.get("to") == for_agent:
                     try:
                         meta = runtime.metadata(handle, for_agent=for_agent)
                         read = meta.get("read", False)
+                        status = meta.get("status", "open")
+                        ticket_id = meta.get("ticket_id")
                     except Exception:
                         read = False
+                        status = "unknown"
+                        ticket_id = None
+                        
                     text = msg.get("text", "")
                     inbox.append({
                         "handle": handle,
@@ -559,10 +688,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         "timestamp": msg.get("timestamp"),
                         "preview": text[:100] + "..." if len(text) > 100 else text,
                         "read": read,
+                        "status": status,
+                        "ticket_id": ticket_id,
                     })
             # Unread first, then newest — fully defensive against None in any field
             inbox.sort(key=lambda x: (not bool(x.get("read")), x.get("timestamp") or ""), reverse=True)
             return [TextContent(type="text", text=json.dumps({"for_agent": for_agent, "count": len(inbox), "messages": inbox}, indent=2))]
+
+        elif name == "tether_close":
+            runtime.close_handle(
+                handle=arguments.get("handle"),
+                ticket_id=arguments.get("ticket_id"),
+                status=arguments.get("status", "completed"),
+                reason=arguments.get("reason")
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "status": "updated",
+                "handle": arguments.get("handle"),
+                "ticket_id": arguments.get("ticket_id"),
+                "new_status": arguments.get("status", "completed")
+            }))]
 
         elif name == "tether_receive":
             msg = runtime.resolve(arguments["handle"], for_agent=arguments.get("for_agent"))
@@ -690,9 +835,44 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             raise ValueError(f"Unknown tool: {name}")
     
     except TetherError as e:
+        logger.warning("Tether tool call failed", extra={"tool": name, "error": str(e)})
         return [TextContent(type="text", text=json.dumps({"error": type(e).__name__, "message": str(e)}))]
     except Exception as e:
+        logger.warning("Tether tool call failed", extra={"tool": name, "error": str(e)})
         return [TextContent(type="text", text=json.dumps({"error": "InternalError", "message": str(e)}))]
+
+
+def _encode_b64(data: bytes) -> str:
+    """Encode bytes as ASCII base64."""
+    return base64.b64encode(data).decode("ascii")
+
+
+def _decode_b64(data: str, label: str) -> bytes:
+    """Decode base64 input with a stable error."""
+    try:
+        return base64.b64decode(data.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ValueError(f"invalid {label}") from exc
+
+
+def _blob_content_type(handle: str) -> str:
+    """Read blob content type from the KVFold sidecar TOML."""
+    sidecar = runtime._kvfold_dir / f"{suffix(handle, BLOB_PREFIX)}.toml"
+    with sidecar.open("rb") as fh:
+        metadata = tomllib.load(fh)
+    content_type = metadata.get("content_type")
+    if not isinstance(content_type, str):
+        raise ValueError(f"missing content_type metadata for {handle}")
+    return content_type
+
+
+def _tree_children(handle: str) -> list[str]:
+    """Read raw child handles from a tree handle."""
+    raw = (runtime._kvfold_dir / suffix(handle, TREE_PREFIX)).read_bytes()
+    children = json.loads(raw.decode("utf-8"))
+    if not isinstance(children, list):
+        raise ValueError(f"tree handle does not contain a list: {handle}")
+    return [str(child) for child in children]
 
 
 async def main():
