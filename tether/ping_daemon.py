@@ -32,8 +32,10 @@ IDLE_PATTERNS = [
     re.compile(r'\$\s*$'),                   # bash/zsh prompt
     re.compile(r'>\s*$'),                    # Qwen Code / Gemini idle prompt
     re.compile(r'\u276f\s*$'),              # Claude Code ❯ prompt
+    re.compile(r'\u25c7\s*$'),              # Codex CLI ◇ idle prompt
     re.compile(r'Waiting for your input'),   # Claude Code idle text
     re.compile(r'^\?\s*$'),                  # Claude Code ? prompt
+    re.compile(r'Ready'),                    # Codex CLI "◇  Ready" state
 ]
 
 IDLE_POLL_INTERVAL = 2   # seconds
@@ -111,7 +113,7 @@ def resolve_pane(agent: str, fallback_pane: str) -> str:
         heuristics = {
             "qwen":   [re.compile(r"Qwen")],
             "gemini": [re.compile(r"✦"), re.compile(r"gemini")],
-            "codex":  [re.compile(r"Codex")],
+            "codex":  [re.compile(r"Codex"), re.compile(r"◇"), re.compile(r"Ready")],
             "kilo":   [re.compile(r"Kilo")],
         }
         patterns = heuristics.get(agent.lower(), [])
