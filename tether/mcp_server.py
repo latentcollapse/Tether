@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tether import SQLiteRuntime
+from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
 from tether.exceptions import TetherError
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -100,6 +101,35 @@ async def _fire_ping(url: str, payload: dict):
 async def list_tools() -> list[Tool]:
     """List available Tether tools."""
     return [
+        Tool(
+            name="tether_generate_keypair",
+            description="Generate a Curve25519 keypair for encrypted Tether envelopes.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
+        Tool(
+            name="tether_collapse_encrypted",
+            description="Encrypt a payload for the recipient public key and store it as a blob handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "Plaintext payload to encrypt"},
+                    "recipient_pubkey": {"type": "string", "description": "Recipient public key in base64"}
+                },
+                "required": ["payload", "recipient_pubkey"]
+            }
+        ),
+        Tool(
+            name="tether_resolve_encrypted",
+            description="Decrypt an encrypted blob handle using the recipient private key.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Encrypted blob handle"},
+                    "private_key": {"type": "string", "description": "Recipient private key in base64"}
+                },
+                "required": ["handle", "private_key"]
+            }
+        ),
         Tool(
             name="tether_collapse",
             description="Collapse a JSON value into a deterministic handle. Use this to compress data for transfer between LLMs. Supports optional tagging.",
@@ -429,7 +459,19 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
     try:
-        if name == "tether_collapse":
+        if name == "tether_generate_keypair":
+            public_key, private_key = generate_keypair()
+            return [TextContent(type="text", text=json.dumps({"public_key": public_key, "private_key": private_key}))]
+
+        elif name == "tether_collapse_encrypted":
+            handle = collapse_encrypted(arguments["payload"], arguments["recipient_pubkey"])
+            return [TextContent(type="text", text=json.dumps({"handle": handle}))]
+
+        elif name == "tether_resolve_encrypted":
+            payload = resolve_encrypted(arguments["handle"], arguments["private_key"])
+            return [TextContent(type="text", text=json.dumps({"payload": payload}))]
+
+        elif name == "tether_collapse":
             handle = runtime.collapse(
                 arguments["table"], 
                 arguments["data"], 

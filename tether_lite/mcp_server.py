@@ -15,6 +15,7 @@ from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
 from tether_lite.runtime import MessageNotFound, TetherLiteRuntime
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,35 @@ server = Server("tether-lite")
 async def list_tools() -> list[Tool]:
     """List TetherLite MCP tools."""
     return [
+        Tool(
+            name="tether_generate_keypair",
+            description="Generate a Curve25519 keypair for encrypted Tether envelopes.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="tether_collapse_encrypted",
+            description="Encrypt a payload for the recipient public key and store it as a blob handle.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "Plaintext payload to encrypt"},
+                    "recipient_pubkey": {"type": "string", "description": "Recipient public key in base64"},
+                },
+                "required": ["payload", "recipient_pubkey"],
+            },
+        ),
+        Tool(
+            name="tether_resolve_encrypted",
+            description="Decrypt an encrypted blob handle using the recipient private key.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "Encrypted blob handle"},
+                    "private_key": {"type": "string", "description": "Recipient private key in base64"},
+                },
+                "required": ["handle", "private_key"],
+            },
+        ),
         Tool(
             name="tether_send",
             description="Send a message to another agent. Automatically adds ISO timestamp.",
@@ -92,6 +122,18 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle TetherLite MCP tool calls."""
     try:
+        if name == "tether_generate_keypair":
+            public_key, private_key = generate_keypair()
+            return [_text({"public_key": public_key, "private_key": private_key})]
+
+        if name == "tether_collapse_encrypted":
+            handle = collapse_encrypted(arguments["payload"], arguments["recipient_pubkey"])
+            return [_text({"handle": handle})]
+
+        if name == "tether_resolve_encrypted":
+            payload = resolve_encrypted(arguments["handle"], arguments["private_key"])
+            return [_text({"payload": payload})]
+
         if name == "tether_send":
             handle = runtime.send(
                 from_agent=arguments.get("from_agent", "unknown"),

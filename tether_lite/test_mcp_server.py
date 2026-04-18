@@ -10,6 +10,7 @@ from tether_lite.runtime import TetherLiteRuntime
 
 @pytest.fixture(autouse=True)
 def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TETHER_KVFOLD_DIR", str(tmp_path / "kvfold"))
     monkeypatch.setattr(mcp_server, "runtime", TetherLiteRuntime(tmp_path))
 
 
@@ -21,6 +22,9 @@ def test_list_tools_exposes_required_surface() -> None:
         "tether_inbox",
         "tether_receive",
         "tether_close",
+        "tether_generate_keypair",
+        "tether_collapse_encrypted",
+        "tether_resolve_encrypted",
     }
 
 
@@ -56,3 +60,31 @@ def test_mcp_errors_are_structured() -> None:
 
     data = json.loads(result[0].text)
     assert data["error"] == "MessageNotFound"
+
+
+def test_mcp_encrypted_round_trip() -> None:
+    generated = asyncio.run(mcp_server.call_tool("tether_generate_keypair", {}))
+    keys = json.loads(generated[0].text)
+
+    collapsed = asyncio.run(
+        mcp_server.call_tool(
+            "tether_collapse_encrypted",
+            {
+                "payload": "secret from lite",
+                "recipient_pubkey": keys["public_key"],
+            },
+        )
+    )
+    handle = json.loads(collapsed[0].text)["handle"]
+
+    resolved = asyncio.run(
+        mcp_server.call_tool(
+            "tether_resolve_encrypted",
+            {
+                "handle": handle,
+                "private_key": keys["private_key"],
+            },
+        )
+    )
+
+    assert json.loads(resolved[0].text) == {"payload": "secret from lite"}

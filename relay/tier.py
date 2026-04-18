@@ -113,6 +113,16 @@ def agent_limit_response(tier: Tier, max_agents: int) -> dict[str, object]:
     return {"error": "agent_limit_reached", "tier": tier.value, "max_agents": max_agents}
 
 
+def feature_upgrade_response(tier: Tier, feature: str) -> dict[str, object]:
+    """Build the standardized feature-gating response body."""
+    return {
+        "error": "upgrade_required",
+        "tier": tier.value,
+        "feature": feature,
+        "upgrade": f"upgrade tier for {feature}",
+    }
+
+
 def record_message_or_response(agent_id: str, tier: Tier) -> dict[str, object] | None:
     """Increment daily message usage or return a 429 response body."""
     config = tier_config(tier)

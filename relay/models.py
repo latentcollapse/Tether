@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class AgentRegisterRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str | None = None
+    pubkey: str | None = None
 
 
 class AgentRegisterResponse(BaseModel):
@@ -21,6 +22,11 @@ class AgentInfo(BaseModel):
     online: bool
     last_seen: str | None
     tier: str
+
+
+class AgentPubkeyResponse(BaseModel):
+    agent_id: str
+    pubkey: str
 
 
 class RouteHandleRequest(BaseModel):
