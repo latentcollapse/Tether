@@ -1,146 +1,83 @@
 #!/usr/bin/env python3
 """
-Tether ping daemon — capture-pane guard version.
+Tether ping daemon — universal desktop notification delivery.
 
-On POST, writes notification to a buffer file, polls tmux capture-pane
-every 2s to detect an idle prompt, then injects only when safe.
+On POST, delivers notifications via:
+  1. notify-send (Linux desktop popup) — works for any app, no tmux needed
+  2. ~/.tether_notify — file pickup via PROMPT_COMMAND in bashrc
+  3. /tmp/tether-ping-{agent}.txt — buffer file for observability
 
-Usage: python3 ping_daemon.py --agent <name> --pane <tmux_pane_id> --port <port>
-Example: python3 ping_daemon.py --agent qwen --pane %5 --port 7701
+No tmux. No pane detection. No idle polling. Works with Claude Code,
+Codex CLI, Qwen Code, Gemini CLI, OpenClaw, or any other agent on the machine.
+
+Usage: python3 ping_daemon.py --agent <name> --port <port>
+Example: python3 ping_daemon.py --agent claude --port 7703
 """
 import argparse
 import json
 import os
-import re
+import platform
 import subprocess
 import sys
 import threading
-import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-
-IDLE_PATTERNS = [
-    re.compile(r'\$\s*$'),                    # bash/zsh prompt
-    re.compile(r'>\s*$'),                     # Qwen Code / Gemini idle prompt
-    re.compile(r'\u276f\s*$'),               # Claude Code ❯ prompt (unicode)
-    re.compile(r'Waiting for your input'),     # Claude Code idle text
-    re.compile(r'^\?\s*$'),                   # Claude Code ? prompt
-]
-
-IDLE_POLL_INTERVAL = 2  # seconds
-IDLE_MAX_WAIT = 30       # seconds — inject anyway after this
-
-
-def pane_is_idle(pane: str) -> bool:
-    """Check if the tmux pane is at an idle prompt."""
-    try:
-        result = subprocess.run(
-            ["tmux", "capture-pane", "-t", pane, "-p"],
-            capture_output=True, text=True, timeout=5,
-        )
-        lines = result.stdout.strip().split("\n")
-        if not lines:
-            return False
-        # Check last few non-empty lines
-        for line in reversed(lines[-5:]):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            for pat in IDLE_PATTERNS:
-                if pat.search(stripped):
-                    return True
-        # Fallback: if the last line is empty, pane is likely idle
-        if lines[-1].strip() == "":
-            return True
-        return False
-    except (subprocess.TimeoutExpired, Exception):
-        return False
 
 
 def is_enabled(agent: str) -> bool:
-    """Check if pings are enabled for this agent (flag file exists)."""
     return os.path.exists(f"/tmp/tether-ping-{agent}.enabled")
 
 
-def resolve_pane(agent: str, fallback_pane: str) -> str:
-    """Dynamically resolve the tmux pane currently running the agent's process."""
+def desktop_notify(title: str, body: str) -> None:
+    system = platform.system()
     try:
-        # Format: id|command|title
-        result = subprocess.run(
-            ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return fallback_pane
-
-        lines = result.stdout.strip().split("\n")
-        
-        # Heuristics for agent matching
-        heuristics = {
-            "claude": [re.compile(r"Claude Code"), re.compile(r"claude")],
-            "qwen": [re.compile(r"Qwen")],
-            "gemini": [re.compile(r"✦"), re.compile(r"gemini")],
-            "kilo": [re.compile(r"Kilo")],
-            "codex": [re.compile(r"Codex")],
-        }
-        
-        patterns = heuristics.get(agent.lower(), [])
-        
-        for line in lines:
-            parts = line.split("|")
-            if len(parts) < 3:
-                continue
-            pane_id, command, title = parts[0], parts[1], parts[2]
-            
-            # Match by command
-            if command.lower() == agent.lower():
-                return pane_id
-            
-            # Match by title or command patterns
-            for pat in patterns:
-                if pat.search(title) or pat.search(command):
-                    return pane_id
-                    
-        return fallback_pane
-    except Exception:
-        return fallback_pane
-
-
-def inject_when_idle(fallback_pane: str, notification: str, agent: str, timeout: int = IDLE_MAX_WAIT):
-    """Wait for idle prompt, then inject notification. Only fires if enabled."""
-    if not is_enabled(agent):
-        return  # Pings disabled — drop silently
-
-    # Resolve target pane dynamically at fire time
-    pane = resolve_pane(agent, fallback_pane)
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pane_is_idle(pane):
-            break  # Pane is at a known idle prompt
-        time.sleep(IDLE_POLL_INTERVAL)
-
-    # Inject the command, wait a beat, then submit
-    # C-m is Ctrl+M (raw Enter) which works more reliably than "Enter" key
-    try:
-        # Type the text
-        subprocess.run(
-            ["tmux", "send-keys", "-t", pane, notification],
-            check=False,
-        )
-        time.sleep(0.5)  # Let the CLI process the input
-        # Submit with C-m
-        subprocess.run(
-            ["tmux", "send-keys", "-t", pane, "C-m"],
-            check=False,
-        )
+        if system == "Linux":
+            subprocess.run(
+                ["notify-send", "-a", "Tether", "-t", "8000", title, body],
+                check=False, timeout=3,
+            )
+        elif system == "Darwin":
+            script = f'display notification "{body}" with title "{title}"'
+            subprocess.run(["osascript", "-e", script], check=False, timeout=3)
+        elif system == "Windows":
+            # PowerShell toast — works on Win10+
+            ps = (
+                f'[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;'
+                f'$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);'
+                f'$t.GetElementsByTagName("text")[0].AppendChild($t.CreateTextNode("{title}")) | Out-Null;'
+                f'$t.GetElementsByTagName("text")[1].AppendChild($t.CreateTextNode("{body}")) | Out-Null;'
+                f'[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Tether").Show([Windows.UI.Notifications.ToastNotification]::new($t));'
+            )
+            subprocess.run(["powershell", "-Command", ps], check=False, timeout=5)
     except Exception:
         pass
 
 
+def file_notify(agent: str, notification: str) -> None:
+    # ~/.tether_notify — picked up by PROMPT_COMMAND in bashrc at next shell prompt
+    try:
+        notify_path = os.path.expanduser("~/.tether_notify")
+        with open(notify_path, "w") as f:
+            f.write(notification + "\n")
+    except Exception:
+        pass
+    # /tmp buffer for observability / debugging
+    try:
+        with open(f"/tmp/tether-ping-{agent}.txt", "w") as f:
+            f.write(notification + "\n")
+    except Exception:
+        pass
+
+
+def deliver(agent: str, notification: str) -> None:
+    if not is_enabled(agent):
+        return
+    desktop_notify("Tether", notification)
+    file_notify(agent, notification)
+
+
 class PingHandler(BaseHTTPRequestHandler):
-    def __init__(self, *args, agent=None, pane=None, **kwargs):
+    def __init__(self, *args, agent=None, **kwargs):
         self.agent = agent
-        self.pane = pane
         super().__init__(*args, **kwargs)
 
     def do_POST(self):
@@ -149,52 +86,38 @@ class PingHandler(BaseHTTPRequestHandler):
         try:
             data = json.loads(body)
             sender = data.get("from", "unknown")
-            subject = data.get("subject", "no subject")
             handle = data.get("handle", "")
-            # Shell-safe notification: plain text, no # or ! that could trigger
-            # bash history expansion or comment processing. Single quotes around
-            # handle protect against shell interpretation of special chars like &.
             notification = f"[Tether] From agent: {sender}  Handle: '{handle}'"
-
-            # Write to buffer file for observability
-            buf_path = f"/tmp/tether-ping-{self.agent}.txt"
-            with open(buf_path, "w") as f:
-                f.write(notification)
-
-            # Inject in background thread so HTTP handler returns fast
-            thread = threading.Thread(
-                target=inject_when_idle,
-                args=(self.pane, notification, self.agent),
+            threading.Thread(
+                target=deliver,
+                args=(self.agent, notification),
                 daemon=True,
-            )
-            thread.start()
-        except (json.JSONDecodeError, Exception):
+            ).start()
+        except Exception:
             pass
         self.send_response(200)
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # silence request logs
+        pass
 
 
 def main():
     parser = argparse.ArgumentParser(description="Tether ping daemon")
-    parser.add_argument("--agent", required=True, help="Agent name (e.g. qwen)")
-    parser.add_argument("--pane", required=True, help="Tmux pane ID (e.g. %%5)")
+    parser.add_argument("--agent", required=True, help="Agent name (e.g. claude)")
     parser.add_argument("--port", type=int, required=True, help="Port to listen on")
     args = parser.parse_args()
 
     def handler_factory(*a, **kw):
-        return PingHandler(*a, agent=args.agent, pane=args.pane, **kw)
+        return PingHandler(*a, agent=args.agent, **kw)
 
     server = HTTPServer(("localhost", args.port), handler_factory)
-    print(f"Ping daemon for {args.agent} listening on http://localhost:{args.port} (pane {args.pane})")
-    print(f'Register with: tether_register_ping(agent="{args.agent}", url="http://localhost:{args.port}")')
+    print(f"Tether ping daemon [{args.agent}] on http://localhost:{args.port}")
+    print(f'Register: tether_register_ping(agent="{args.agent}", url="http://localhost:{args.port}")')
     sys.stdout.flush()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down.")
         server.shutdown()
 
 
