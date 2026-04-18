@@ -117,6 +117,35 @@ opened = "2026-04-17"
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[ticket]]
+id = "T-055"
+title = "OpenClaw Tether Skill — Native HTTP Notify Endpoint"
+status = "open"
+tier = "orange"
+area = ["openclaw", "ping", "autonomous"]
+assignee = "unassigned"
+opened = "2026-04-18"
+depends_on = ["T-053"]
+# Ping daemon delivery model:
+#   claude  → desktop notify (no tmux, safe for Claude Code input box)
+#   OpenClaw → HTTP endpoint in Tether skill (native, no tmux needed)
+#   Codex/Gemini/Qwen CLI → tmux injection (fallback for dumb terminals)
+#
+# Add a lightweight HTTP listener to skills/tether/index.mjs that:
+#   - Starts on a configurable port (TETHER_NOTIFY_PORT, default 7705)
+#   - Accepts POST with { from, handle, subject }
+#   - Queues the notification in OpenClaw's UI as a new user message:
+#     "[Tether] From agent: {from}  Handle: '{handle}'"
+#   - Auto-submits it through OpenClaw's event loop (same as user pressing Enter)
+#   - Registers itself with tether_register_ping on skill load
+#
+# This makes OpenClaw fully autonomous without tmux. No PTY manipulation.
+# ping_daemon.py treats OpenClaw as a DESKTOP_NOTIFY_AGENTS peer — posts to
+# the HTTP endpoint, OpenClaw handles submission natively.
+#
+# Update DESKTOP_NOTIFY_AGENTS in ping_daemon.py to include "openclaw" once live.
+# Document in skills/tether/SKILL.md: no tmux required for OpenClaw users.
+
+[[ticket]]
 id = "T-053"
 title = "OpenClaw Socket — Tether Cloud Bridge"
 status = "open"
