@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 
 from relay import auth
 from relay.db import RelayDB, utc_now
+from relay.tier import Tier, parse_tier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["websocket"])
@@ -86,6 +87,10 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str) -> None:
         return
     if context.agent_id != agent_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    agent_tier = parse_tier(db.get_agent_tier(agent_id) or "free")
+    if agent_tier is Tier.FREE:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="upgrade required for relay websocket")
         return
 
     await manager.connect(agent_id, websocket)

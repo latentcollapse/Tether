@@ -20,6 +20,7 @@ class AgentInfo(BaseModel):
     name: str
     online: bool
     last_seen: str | None
+    tier: str
 
 
 class RouteHandleRequest(BaseModel):
@@ -63,6 +64,15 @@ class KeyInfo(BaseModel):
     label: str | None
     created_at: str
     revoked_at: str | None
+
+
+class AdminTierRequest(BaseModel):
+    tier: str
+
+
+class AdminTierResponse(BaseModel):
+    agent_id: str
+    tier: str
 
 
 class HandlePush(BaseModel):
