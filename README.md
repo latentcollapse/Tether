@@ -2,7 +2,7 @@
 
 > Coordination infrastructure for multi-agent AI systems.
 
-AI agents have no shared coordination layer. Tether is the protocol and runtime for persistent, verified, cross-machine context passing over MCP.
+AI agents have no shared coordination layer. Tether is the protocol and runtime for persistent, verified, cross-machine context passing over MCP. This is the tool you use to coordinate Claude Code, Codex CLI, Gemini CLI, OpenClaw, and more. It is recommended to write a standard operating procedure and job board/debt ledger for your projects already, but these are paramount to the workflow operating efficiently.
 
 Tether has two operating modes:
 
