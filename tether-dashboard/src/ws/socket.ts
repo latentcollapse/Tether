@@ -1,39 +1,34 @@
 import { useConnectionStore } from '../store/connectionStore';
 import { useMessageStore } from '../store/messageStore';
 import { useAgentStore } from '../store/agentStore';
+import { useInboxStore } from '../store/inboxStore';
 import { useAuthStore } from '../store/authStore';
-import { WS_URL } from '../utils/constants';
-import { mockAgents } from '../api/mocks';
+import { api } from '../api/client';
 
-// The relay uses a real WebSocket, but since backend isn't ready, we'll mock it if it fails to connect.
 let ws: WebSocket | null = null;
-let reconnectTimer: any = null;
-let mockInterval: any = null;
+let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 export function connectWebSocket() {
   const token = useAuthStore.getState().token;
   if (!token) return;
 
-  const { isConnected, setConnected, incrementReconnects, resetReconnects, reconnectAttempts } = useConnectionStore.getState();
+  const { setConnected, resetReconnects, incrementReconnects } = useConnectionStore.getState();
   
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
 
-  try {
-    // In a real environment, this connects to the python relay.
-    // ws = new WebSocket(`${WS_URL}?token=${token}`);
-    
-    // For AI Studio environment without the physical relay port available, 
-    // we bypass it and immediately trigger mock mode.
-    throw new Error("Local mock mode active");
-
-  } catch (err) {
-    console.warn("WebSocket fallback to local simulation", err);
-    startMockSimulation();
-    setConnected(true);
-    resetReconnects();
-  }
+  startPolling();
+  pollDashboardData()
+    .then(() => {
+      setConnected(true);
+      resetReconnects();
+    })
+    .catch((err) => {
+      console.warn("Dashboard data polling failed", err);
+      setConnected(false);
+      incrementReconnects();
+    });
 }
 
 export function disconnectWebSocket() {
@@ -41,40 +36,34 @@ export function disconnectWebSocket() {
     ws.close();
     ws = null;
   }
-  if (mockInterval) {
-    clearInterval(mockInterval);
-    mockInterval = null;
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
   }
   useConnectionStore.getState().setConnected(false);
 }
 
-function startMockSimulation() {
-  if (mockInterval) clearInterval(mockInterval);
-  
-  // Seed initial agents
-  useAgentStore.getState().setAgents(mockAgents);
-
-  mockInterval = setInterval(() => {
-    const paused = useMessageStore.getState().isPaused;
-    if (paused) return;
-
-    // Simulate random routing event
-    const froms = ['claude', 'codex', 'helper'];
-    const tos = ['claude', 'codex', 'system'];
-    const from = froms[Math.floor(Math.random() * froms.length)] + '@my-laptop';
-    const to = tos[Math.floor(Math.random() * tos.length)] + (Math.random() > 0.5 ? '@cloud-box' : '@my-laptop');
-    if (from === to) return;
-
-    const hash = 'h&l_messages_' + Math.random().toString(16).substring(2, 14) + Math.random().toString(16).substring(2, 14);
-    
-    useMessageStore.getState().addMessage({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      from,
-      to,
-      handle: hash,
-      ticketId: Math.random() > 0.7 ? `D-${Math.floor(Math.random() * 900) + 100}` : undefined
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(() => {
+    pollDashboardData().catch((err) => {
+      console.warn("Dashboard data polling failed", err);
+      useConnectionStore.getState().setConnected(false);
+      useConnectionStore.getState().incrementReconnects();
     });
+  }, 5000);
+}
 
-  }, 1200);
+async function pollDashboardData() {
+  const [agentResponse, feed, inbox] = await Promise.all([
+    api.getAgents(),
+    api.getFeed(50),
+    api.getInbox(),
+  ]);
+  useAgentStore.getState().setAgents(agentResponse.agents);
+  useAgentStore.getState().setEdges(agentResponse.edges);
+  useMessageStore.getState().setFeed(feed);
+  useInboxStore.getState().setMessages(inbox);
+  useConnectionStore.getState().setConnected(true);
+  useConnectionStore.getState().resetReconnects();
 }

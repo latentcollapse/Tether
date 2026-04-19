@@ -5,6 +5,7 @@ export interface MessageEvent {
   to: string;
   handle: string;
   ticketId?: string;
+  table?: string;
 }
 
 export type FeedItem = MessageEvent;

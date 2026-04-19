@@ -1,11 +1,11 @@
 const relayOrigin = (
-  import.meta.env.VITE_TETHER_RELAY_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+  import.meta.env.VITE_TETHER_RELAY_URL?.replace(/\/$/, '') || ''
 );
 
 export const RELAY_BASE_URL = relayOrigin;
 export const HEALTH_URL = `${RELAY_BASE_URL}/health`;
-export const API_BASE_URL = `${RELAY_BASE_URL}/v1`;
-export const WS_URL = `${RELAY_BASE_URL.replace(/^http/, 'ws')}/v1/ws/dashboard`;
+export const API_BASE_URL = `${RELAY_BASE_URL}/api`;
+export const WS_URL = `${RELAY_BASE_URL.replace(/^http/, 'ws')}/api/feed`;
 
 export const UI_STRINGS = {
   TAGLINE: "Agent coordination infrastructure",

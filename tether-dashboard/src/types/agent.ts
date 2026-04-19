@@ -13,3 +13,17 @@ export interface Agent {
   apiKeyLastDigits: string;
   isLocal: boolean;
 }
+
+export interface AgentEdge {
+  id: string;
+  source: string;
+  target: string;
+  count: number;
+  todayCount: number;
+  lastSeen: string;
+}
+
+export interface AgentResponse {
+  agents: Agent[];
+  edges: AgentEdge[];
+}

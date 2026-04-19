@@ -10,7 +10,6 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useAgentStore } from '../../store/agentStore';
-import { useMessageStore } from '../../store/messageStore';
 import { AgentNode } from './AgentNode';
 import { MessageEdge } from './MessageEdge';
 
@@ -24,7 +23,7 @@ const edgeTypes = {
 
 export function AgentGraph() {
   const agentsMap = useAgentStore(s => s.agents);
-  const feed = useMessageStore(s => s.feed);
+  const messageEdges = useAgentStore(s => s.edges);
   
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -64,27 +63,21 @@ export function AgentGraph() {
     });
   }, [agentsMap, setNodes]);
 
-  // Derive edges from recent feed
+  // Derive edges from observed message flow in postoffice.db
   useEffect(() => {
-    // Only care about last 10 seconds of messages to show active links
-    const recent = feed.filter(f => Date.now() - new Date(f.timestamp).getTime() < 10000);
-    
-    const edgeMap = new Map<string, Edge>();
-    
-    recent.forEach(msg => {
-      if (!agentsMap[msg.from] || !agentsMap[msg.to]) return;
-      const edgeId = `e-${msg.from}-${msg.to}`;
-      edgeMap.set(edgeId, {
-        id: edgeId,
-        source: msg.from,
-        target: msg.to,
+    const nextEdges = messageEdges
+      .filter(edge => agentsMap[edge.source] && agentsMap[edge.target])
+      .map((edge): Edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
         type: 'message',
-        animated: true,
-      });
-    });
+        animated: Date.now() - new Date(edge.lastSeen).getTime() < 10000,
+        data: { count: edge.count, todayCount: edge.todayCount },
+      }));
 
-    setEdges(Array.from(edgeMap.values()));
-  }, [feed, agentsMap, setEdges]);
+    setEdges(nextEdges);
+  }, [messageEdges, agentsMap, setEdges]);
 
   return (
     <div className="w-full h-full bg-[#05060a]" style={{ colorScheme: 'dark' }}>

@@ -1,15 +1,34 @@
 import { useState, useEffect } from 'react';
 import { Download, FileDigit, Search } from 'lucide-react';
 import { api } from '../api/client';
-import { BlobHandleData, HandleLookupResult, TreeHandleData } from '../types/handle';
+import { BlobHandleData, HandleLookupResult, HandleSummary, TreeHandleData } from '../types/handle';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { CopyButton } from '../components/shared/CopyButton';
+import { timeAgo, truncateHandle } from '../utils/formatters';
 
 export function HandleBrowserView() {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<HandleLookupResult | null>(null);
+  const [handles, setHandles] = useState<HandleSummary[]>([]);
+  const [totalHandles, setTotalHandles] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const pageSize = 25;
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getHandles(pageSize, offset)
+      .then((data) => {
+        if (cancelled) return;
+        setHandles(data.items);
+        setTotalHandles(data.total);
+      })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  }, [offset]);
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -36,10 +55,10 @@ export function HandleBrowserView() {
   }, [query]);
 
   return (
-    <div className="max-w-2xl mx-auto p-6 flex flex-col gap-8 w-full h-full">
+    <div className="max-w-5xl mx-auto p-6 flex flex-col gap-8 w-full h-full">
       <div>
         <h1 className="text-2xl font-semibold mb-2">Handle Browser</h1>
-        <p className="text-[#8892b0] text-sm mb-6">Lookup routing metadata by handle hash. Content is not available.</p>
+        <p className="text-[#8892b0] text-sm mb-6">Browse handles from the local Tether database.</p>
         
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8892b0]" />
@@ -74,10 +93,96 @@ export function HandleBrowserView() {
             <p className="text-[#ef4444] text-sm">Handle not found</p>
           </div>
         ) : (
-          <div className="h-40 flex items-center justify-center border border-[#ffffff14] border-dashed rounded-xl text-[#8892b0] text-sm">
-            Enter a handle above to view routing details
-          </div>
+          <HandleList
+            handles={handles}
+            total={totalHandles}
+            offset={offset}
+            pageSize={pageSize}
+            onPage={setOffset}
+            onSelect={(handle) => {
+              setQuery(handle);
+              setResult(null);
+              setNotFound(false);
+            }}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+interface HandleListProps {
+  handles: HandleSummary[];
+  total: number;
+  offset: number;
+  pageSize: number;
+  onPage: (offset: number) => void;
+  onSelect: (handle: string) => void;
+}
+
+function HandleList({ handles, total, offset, pageSize, onPage, onSelect }: HandleListProps) {
+  if (handles.length === 0) {
+    return (
+      <div className="h-40 flex items-center justify-center border border-[#ffffff14] border-dashed rounded-xl text-[#8892b0] text-sm">
+        No handles found in the database.
+      </div>
+    );
+  }
+
+  const nextOffset = offset + pageSize;
+  const prevOffset = Math.max(0, offset - pageSize);
+
+  return (
+    <div className="bg-[#0f111a] border border-[#ffffff14] rounded-2xl overflow-hidden shadow-xl">
+      <div className="flex items-center justify-between gap-4 p-4 border-b border-[#ffffff14]">
+        <div>
+          <h2 className="text-sm font-semibold text-[#e0e6ed]">All Handles</h2>
+          <p className="text-xs text-[#8892b0] mt-1">{total.toLocaleString()} total handles</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onPage(prevOffset)}
+            disabled={offset === 0}
+            className="px-3 py-1.5 rounded-lg border border-[#ffffff14] text-xs text-[#e0e6ed] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => onPage(nextOffset)}
+            disabled={nextOffset >= total}
+            className="px-3 py-1.5 rounded-lg border border-[#ffffff14] text-xs text-[#e0e6ed] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+
+      <div className="divide-y divide-[#ffffff14]">
+        {handles.map((item) => (
+          <button
+            type="button"
+            key={item.handle}
+            onClick={() => onSelect(item.handle)}
+            className="w-full grid grid-cols-[120px_1fr_110px] md:grid-cols-[130px_1fr_110px_140px] gap-4 items-center px-4 py-3 text-left hover:bg-[#ffffff14]/5 transition-colors"
+          >
+            <div>
+              <div className="text-xs uppercase tracking-[1px] text-[#8892b0]">{item.table}</div>
+              <div className="text-[11px] text-[#8892b0]/70 mt-0.5">{item.kind}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="font-mono text-sm text-[#7000ff] truncate">{truncateHandle(item.handle)}</div>
+              <div className="text-xs text-[#8892b0] truncate mt-1">
+                {item.fromAgent && item.toAgent ? `${item.fromAgent} -> ${item.toAgent}` : item.subject || item.status || 'metadata'}
+              </div>
+            </div>
+            <div className="text-xs text-[#8892b0]">{timeAgo(item.createdAt)}</div>
+            <div className="hidden md:flex justify-end">
+              <CopyButton text={item.handle} />
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );

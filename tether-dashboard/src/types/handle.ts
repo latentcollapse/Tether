@@ -8,7 +8,30 @@ export interface MessageHandleData {
   status: 'open' | 'stale' | 'closed' | 'read';
   ticketId?: string;
   tags: string[];
+  subject?: string;
   text?: string;
+}
+
+export type HandleMetadata = MessageHandleData;
+
+export interface HandleSummary {
+  handle: string;
+  table: string;
+  kind: HandleLookupResult['kind'];
+  createdAt: string;
+  status?: string;
+  ticketId?: string;
+  tags?: string[];
+  fromAgent?: string;
+  toAgent?: string;
+  subject?: string;
+}
+
+export interface HandleListResponse {
+  items: HandleSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface InlineHandleData {

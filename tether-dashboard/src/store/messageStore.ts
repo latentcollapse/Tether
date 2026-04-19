@@ -4,6 +4,7 @@ import { FeedItem } from '../types/message';
 interface MessageState {
   feed: FeedItem[];
   addMessage: (msg: FeedItem) => void;
+  setFeed: (items: FeedItem[]) => void;
   clearFeed: () => void;
   isPaused: boolean;
   setPaused: (paused: boolean) => void;
@@ -18,6 +19,7 @@ export const useMessageStore = create<MessageState>((set) => ({
       if (next.length > 200) next.length = 200; // max 200 items in DOM
       return { feed: next };
     }),
+  setFeed: (items) => set((state) => state.isPaused ? state : { feed: items.slice(0, 200) }),
   clearFeed: () => set({ feed: [] }),
   isPaused: false,
   setPaused: (paused) => set({ isPaused: paused }),

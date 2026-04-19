@@ -192,6 +192,7 @@ depends_on = ["T-053"]
 id = "T-053"
 title = "OpenClaw Socket — Tether Cloud Bridge"
 status = "complete"
+# T-058 and T-059 added below
 tier = "red"
 area = ["openclaw", "relay"]
 assignee = "codex"

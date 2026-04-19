@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useSubscriptionStore } from '../store/subscriptionStore';
 import { getTierUsageSnapshot, getUpgradeTarget, isNearLimit } from '../utils/subscription';
+import { api } from '../api/client';
 
 const mockDailyData = [
   { name: '6d ago', sent: 1800, received: 1400 },
@@ -33,6 +35,24 @@ export function UsageView() {
   const usage = getTierUsageSnapshot(currentTier);
   const upgradeTarget = getUpgradeTarget(currentTier);
   const showNearLimitBanner = currentTier !== 'Free' && isNearLimit(usage) && upgradeTarget;
+  const [stats, setStats] = useState({ messages: 0, agents: 0, handles: 0 });
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadStats = () => {
+      api.getStats()
+        .then((data) => {
+          if (!cancelled) setStats(data);
+        })
+        .catch(console.error);
+    };
+    loadStats();
+    const interval = setInterval(loadStats, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <div className="w-full max-w-6xl mx-auto p-6 flex flex-col gap-8 pb-12">
@@ -64,9 +84,9 @@ export function UsageView() {
       {/* Stats row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
-          { label: 'Messages', value: usage.messagesUsedToday.toLocaleString(), sub: `${usage.messageLimitToday.toLocaleString()} daily cap`, trend: true },
-          { label: 'Agents', value: usage.agentsRegistered.toString(), sub: `${usage.agentsLimit} registered`, trend: true },
-          { label: 'Avg Latency', value: '42ms', sub: 'delivery', trend: true },
+          { label: 'Messages', value: stats.messages.toLocaleString(), sub: 'stored messages', trend: true },
+          { label: 'Agents', value: stats.agents.toLocaleString(), sub: 'observed agents', trend: true },
+          { label: 'Handles', value: stats.handles.toLocaleString(), sub: 'all tables', trend: true },
           { label: 'Tier', value: currentTier, sub: currentTier === 'Free' ? 'upgrade available' : 'managed in Stripe', trend: false }
         ].map((stat) => (
           <div key={stat.label} className="bg-[#0f111a] border border-[#ffffff14] rounded-2xl p-6 stat-card-gradient overflow-hidden">

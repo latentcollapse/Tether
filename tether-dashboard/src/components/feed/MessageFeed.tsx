@@ -1,13 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMessageStore } from '../../store/messageStore';
 import { FeedItem } from './FeedItem';
 import { Pause, Play, Trash2 } from 'lucide-react';
 import { HandleCard } from '../handles/HandleCard';
-import { mockHandles } from '../../api/mocks';
+import { api } from '../../api/client';
+import { HandleLookupResult } from '../../types/handle';
 
 export function MessageFeed() {
   const { feed, isPaused, setPaused, clearFeed } = useMessageStore();
   const [selectedHandle, setSelectedHandle] = useState<string | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<HandleLookupResult | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedHandle) {
+      setSelectedDetail(null);
+      return;
+    }
+    api.getHandle(selectedHandle)
+      .then((detail) => {
+        if (!cancelled) setSelectedDetail(detail);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedDetail(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedHandle]);
 
   return (
     <div className="flex flex-col h-full bg-[#0f111a] border-l border-[#ffffff14]">
@@ -52,14 +72,20 @@ export function MessageFeed() {
           <div className="w-full max-w-lg relative">
             <button 
               className="absolute -top-3 -right-3 w-8 h-8 bg-[#ffffff14] hover:bg-[#8892b0] text-white rounded-full flex items-center justify-center transition-colors z-10"
-              onClick={() => setSelectedHandle(null)}
+              onClick={() => { setSelectedHandle(null); setSelectedDetail(null); }}
             >
               ×
             </button>
-            <HandleCard handleHash={selectedHandle} metadata={mockHandles[selectedHandle] || {
-               hash: selectedHandle, table: 'messages', fromAgent: 'unknown', toAgent: 'unknown',
-               createdAt: new Date().toISOString(), status: 'open', tags: []
-            }} />
+            {selectedDetail?.kind === 'message' ? (
+              <HandleCard handleHash={selectedHandle} metadata={selectedDetail} />
+            ) : (
+              <div className="bg-[#0f111a] border border-[#ffffff14] rounded-2xl overflow-hidden shadow-xl p-5">
+                <div className="font-mono text-sm text-[#7000ff] truncate mb-4">{selectedHandle}</div>
+                <pre className="text-xs text-[#e0e6ed] whitespace-pre-wrap break-words bg-[#05060a] border border-[#ffffff14] rounded-xl p-4 overflow-x-auto">
+                  {selectedDetail ? JSON.stringify(selectedDetail, null, 2) : 'Loading handle metadata...'}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}

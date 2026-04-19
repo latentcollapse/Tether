@@ -1,12 +1,29 @@
 import { useAuthStore } from '../store/authStore';
-import { mockAgents, mockHandles, mockKeys, mockInboxMessages } from './mocks';
-import { Agent } from '../types/agent';
-import { HandleLookupResult } from '../types/handle';
+import { mockKeys } from './mocks';
+import { Agent, AgentResponse } from '../types/agent';
+import { HandleListResponse, HandleLookupResult } from '../types/handle';
 import { useAgentStore } from '../store/agentStore';
-import { HEALTH_URL } from '../utils/constants';
+import { FeedItem } from '../types/message';
+import { InboxMessage } from '../types/inbox';
+import { API_BASE_URL, HEALTH_URL } from '../utils/constants';
 
 // Fake delay for realism
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return response.json();
+}
 
 class ApiClient {
   private validateSession() {
@@ -34,8 +51,7 @@ class ApiClient {
 
   async getAgents() {
     this.validateSession();
-    await delay(300);
-    return mockAgents;
+    return fetchJson<AgentResponse>('/agents');
   }
 
   async registerAgent(payload: { name: string; type: string; machineLabel?: string; description?: string }): Promise<{ key: string; agent: Agent }> {
@@ -65,11 +81,22 @@ class ApiClient {
 
   async getHandle(hash: string): Promise<HandleLookupResult> {
     this.validateSession();
-    await delay(200);
-    // Find matching handle by prefix
-    const handleKey = Object.keys(mockHandles).find(k => k.startsWith(hash) || k === hash);
-    if (handleKey) return mockHandles[handleKey];
-    throw new Error("Handle not found");
+    return fetchJson<HandleLookupResult>(`/handles/${encodeURIComponent(hash)}`);
+  }
+
+  async getHandles(limit = 100, offset = 0): Promise<HandleListResponse> {
+    this.validateSession();
+    return fetchJson<HandleListResponse>(`/handles?limit=${limit}&offset=${offset}`);
+  }
+
+  async getStats(): Promise<{ messages: number; agents: number; handles: number }> {
+    this.validateSession();
+    return fetchJson('/stats');
+  }
+
+  async getFeed(limit = 50): Promise<FeedItem[]> {
+    this.validateSession();
+    return fetchJson<FeedItem[]>(`/feed?limit=${limit}`);
   }
 
   async getKeys() {
@@ -86,15 +113,15 @@ class ApiClient {
 
   async getInbox() {
     this.validateSession();
-    await delay(300);
-    return mockInboxMessages;
+    return fetchJson<InboxMessage[]>('/messages?limit=100');
   }
 
   async sendMessage(payload: { to: string; subject: string; text: string; ticketId?: string }): Promise<{ handle: string }> {
     this.validateSession();
-    await delay(500);
-    const hash = 'h&l_messages_' + Math.random().toString(16).substring(2, 14) + Math.random().toString(16).substring(2, 14);
-    return { handle: hash };
+    return fetchJson<{ handle: string }>('/messages', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 }
 
