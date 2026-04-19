@@ -56,7 +56,7 @@ export const ComposeTab: React.FC = () => {
   }
 
   return (
-    <form onSubmit={handleSend} className="p-6 max-w-3xl flex flex-col gap-5">
+    <form onSubmit={handleSend} className="h-full overflow-y-auto p-6 max-w-3xl flex flex-col gap-5">
       <div>
         <label className="block text-sm font-medium text-[#8892b0] mb-1.5">To</label>
         <select 

@@ -7,6 +7,8 @@ description: Use Tether tools for cross-agent messaging and deterministic handle
 
 Use these tools when the task crosses agent or framework boundaries.
 
+OpenClaw users do not need tmux for inbound Tether delivery. Notifications arrive natively through the plugin HTTP route and are injected into the active OpenClaw session.
+
 ## When to use which tool
 
 - `tether_send`

@@ -65,7 +65,7 @@ const RESOLVE_TOOL_SCHEMA = {
   required: ["handle"]
 };
 
-function buildInboundMessage(payload) {
+export function buildInboundMessage(payload) {
   const from = typeof payload.from === "string" && payload.from.trim() ? payload.from.trim() : "?";
   const subject =
     typeof payload.subject === "string" && payload.subject.trim()
@@ -80,7 +80,7 @@ function buildInboundMessage(payload) {
     handle,
     from,
     subject,
-    text: `[Tether] From ${from}: ${subject} — handle: ${handle}`
+    text: `[Tether] From agent: ${from}\nHandle: '${handle}'`
   };
 }
 
@@ -111,7 +111,7 @@ function createTetherTool(params) {
   });
 }
 
-async function registerPing(api, pluginRoot, config) {
+export async function registerPing(api, pluginRoot, config, invokeTetherTool = callTetherTool) {
   if (!config.autoRegisterPing || !config.notifyUrl) {
     api.logger.warn(
       "[tether] ping registration skipped; autoRegisterPing disabled or notify URL unresolved",
@@ -119,7 +119,7 @@ async function registerPing(api, pluginRoot, config) {
     return;
   }
   try {
-    const result = await callTetherTool({
+    const result = await invokeTetherTool({
       pluginRoot,
       pluginConfig: config,
       toolName: "tether_register_ping",
@@ -138,7 +138,7 @@ async function registerPing(api, pluginRoot, config) {
   }
 }
 
-function createInboundHandler(params) {
+export function createInboundHandler(params) {
   const { api, config, sessionState } = params;
   return async (req, res) => {
     if ((req.method ?? "GET").toUpperCase() !== "POST") {

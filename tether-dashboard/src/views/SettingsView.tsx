@@ -106,15 +106,15 @@ export function SettingsView() {
               role="switch"
               aria-checked={autopingEnabled}
               onClick={() => setAutopingEnabled((value) => !value)}
-              className={`relative h-7 w-12 rounded-full border transition-colors ${
+              className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${
                 autopingEnabled
                   ? 'border-[#00f2ff] bg-[#00f2ff]/20'
                   : 'border-[#ffffff14] bg-[#ffffff0d]'
               }`}
             >
               <span
-                className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${
-                  autopingEnabled ? 'translate-x-6' : 'translate-x-1'
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  autopingEnabled ? 'translate-x-5' : 'translate-x-0'
                 }`}
               />
             </button>

@@ -5,7 +5,7 @@ import { HandleListResponse, HandleLookupResult } from '../types/handle';
 import { useAgentStore } from '../store/agentStore';
 import { FeedItem } from '../types/message';
 import { InboxMessage } from '../types/inbox';
-import { API_BASE_URL, HEALTH_URL } from '../utils/constants';
+import { API_BASE_URL, HEALTH_URL, RELAY_BASE_URL } from '../utils/constants';
 
 // Fake delay for realism
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -27,6 +27,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 class ApiClient {
   private validateSession() {
+    if (!RELAY_BASE_URL) return; // local mode — no auth required
     const token = useAuthStore.getState().token;
     if (!token) throw new Error("Unauthorized");
   }

@@ -44,9 +44,21 @@ TetherLite is the permanent free tier:
 ### Install
 
 ```bash
-cd Tether
-pip install -e .
+git clone https://github.com/latentcollapse/tether.git
+cd tether
+pip install .
 ```
+
+The built dashboard is committed in `tether-dashboard/dist`, so a basic install does not require Node.js or `npm run build`.
+
+### CLI Commands
+
+```bash
+tether          # launches dashboard at http://localhost:3000
+tether-mcp      # MCP server entry point used by MCP clients
+```
+
+If port `3000` is busy, `tether` falls back to the next free localhost port.
 
 ### MCP Setup
 
@@ -56,19 +68,28 @@ Add Tether to any MCP-compatible client:
 {
   "mcpServers": {
     "tether": {
-      "command": "python",
-      "args": ["/path/to/Tether/tether/mcp_server.py"],
+      "command": "tether-mcp",
+      "args": [],
       "env": {
-        "TETHER_DB": "/path/to/shared/postoffice.db"
+        "TETHER_DB": "~/.local/share/tether/postoffice.db"
       }
     }
   }
 }
 ```
 
+Default `TETHER_DB` locations:
+
+- Linux/Mac: `~/.local/share/tether/postoffice.db`
+- Windows: `%APPDATA%\\tether\\postoffice.db`
+
+All agents sharing the same machine should point to the same database file.
+
 For the TOML-backed local runtime, point tools at `tether_lite` instead of the SQLite runtime where appropriate.
 
 ### First Message
+
+These are MCP tool calls invoked from inside an AI client such as Claude Code, Codex CLI, or OpenClaw. They are not shell commands.
 
 ```text
 tether_send to="codex" subject="status" text="What changed?"
@@ -79,7 +100,7 @@ tether_receive handle="h&l_messages_..."
 ### Dashboard
 
 ```bash
-python -m tether_lite dashboard
+tether
 ```
 
 That serves the built dashboard locally and opens it in a browser.
@@ -201,7 +222,7 @@ Version notes live in [changelog/](changelog/).
 | Version | Highlights |
 |---------|------------|
 | `v1.8` | TetherLite storage/runtime work, relay core, tier enforcement, encrypted envelopes |
-| `v1.7` | Dashboard surfaces and agent graph work |
+| `v1.7` | Ping daemon, autoping, and local delivery tooling |
 | `v1.6` | Ping registration and push notifications |
 | `v1.5` | Shared task board |
 | `v1.4` | Tags, read state, ergonomic CLI improvements |

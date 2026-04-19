@@ -6,6 +6,7 @@ This plugin gives OpenClaw a first-class Tether transport surface:
 - outbound Tether tools backed by the local `tether/mcp_server.py`
 - content-addressed handle exchange instead of raw session transcript copying
 - a clean bridge to non-OpenClaw agents such as Claude Code, Codex CLI, and Gemini
+- native OpenClaw notifications with no tmux pane or shell injection required
 
 This is not just an `mcporter` wrapper. `mcporter` can call MCP tools, but it does not solve inbound delivery, autonomous wake, cross-framework routing, or OpenClaw session injection.
 
@@ -35,7 +36,8 @@ Inbound payload shape matches Tether's ping path:
 The plugin injects:
 
 ```text
-[Tether] From claude: T-053 done — handle: h&l_messages_deadbeef
+[Tether] From agent: claude
+Handle: 'h&l_messages_deadbeef'
 ```
 
 ## Install
@@ -102,6 +104,8 @@ URL selection order:
 1. `plugins.entries.tether.config.notifyUrl`
 2. `TETHER_NOTIFY_URL`
 3. `http://127.0.0.1:${TETHER_NOTIFY_PORT}${notifyPath}`
+
+OpenClaw users do not need tmux injection or `ping_daemon.py`. Tether posts directly to the plugin-owned HTTP route, and the plugin injects the inbound message into the active OpenClaw session.
 
 Primary path selection:
 

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import http.server
 import os
 import socket
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 from typing import Sequence
 
@@ -53,24 +51,25 @@ def find_dashboard_dist() -> Path | None:
 
 
 def launch_dashboard() -> int:
-    """Serve the built dashboard locally and open it in a browser."""
-    dist_dir = find_dashboard_dist()
+    """Serve the built dashboard with the full API backend."""
+    from tether.__main__ import _create_dashboard_app, _dashboard_db_path, _dashboard_dist_dir
+
+    dist_dir = _dashboard_dist_dir() or find_dashboard_dist()
     if dist_dir is None:
         sys.stdout.write("Run `npm run build` in tether-dashboard/ first\n")
         return 1
 
     port = find_open_port()
-    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(dist_dir))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://localhost:{port}"
+    app = _create_dashboard_app(dist_dir)
     _open_browser(url)
-    sys.stdout.write(f"Tether dashboard running at {url}\n")
+    sys.stdout.write(f"Tether dashboard running at {url} — Ctrl+C to stop\n")
+    sys.stdout.flush()
     try:
-        server.serve_forever()
+        import uvicorn
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
     except KeyboardInterrupt:
         pass
-    finally:
-        server.server_close()
     return 0
 
 

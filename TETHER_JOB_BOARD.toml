@@ -162,11 +162,13 @@ completed = "2026-04-18"
 [[ticket]]
 id = "T-055"
 title = "OpenClaw Tether Skill — Native HTTP Notify Endpoint"
-status = "open"
+status = "complete"
 tier = "orange"
 area = ["openclaw", "ping", "autonomous"]
-assignee = "unassigned"
+assignee = "codex"
 opened = "2026-04-18"
+completed = "2026-04-19"
+assigned = "2026-04-19"
 depends_on = ["T-053"]
 # Ping daemon delivery model:
 #   claude  → desktop notify (no tmux, safe for Claude Code input box)
@@ -461,3 +463,36 @@ fix = "Added python -m tether_lite dashboard launcher with dynamic port selectio
 #     for Go, Rust, TypeScript, Java, etc.
 #   - C FFI route (.so) is the power move for truly native embedding
 #   - Probably T-120-ish when someone actually needs it
+
+[[ticket]]
+id = "T-072"
+title = "Deployment Audit Fixes — First-Install Experience"
+status = "complete"
+tier = "orange"
+area = ["docs", "packaging", "dashboard"]
+assignee = "codex"
+opened = "2026-04-19"
+assigned = "2026-04-19"
+completed = "2026-04-19"
+# Findings from deployment audit. All must be resolved before Reddit/public push.
+#
+# CRITICAL (breaks fresh install):
+#   1. tether-dashboard/dist is gitignored — remove from .gitignore, commit the built dist
+#      so `tether dashboard` works on clone with no Node.js required
+#   2. README install section missing `git clone` step; uses `pip install -e .` (dev install)
+#      → change to `pip install .` and add clone instructions
+#   3. MCP config uses hardcoded `/path/to/Tether/tether/mcp_server.py`
+#      → change to `"command": "tether-mcp", "args": []` (works on all platforms, no path needed)
+#   4. MCP config uses `"command": "python"` → change to `"command": "tether-mcp"` (see above)
+#      This also fixes Windows — pip installs a .exe wrapper automatically, no .bat needed
+#
+# HIGH (confusing for new users):
+#   5. TETHER_DB default undocumented — document recommended default path:
+#      Linux/Mac: ~/.local/share/tether/postoffice.db
+#      Windows:   %APPDATA%\tether\postoffice.db
+#   6. `tether` CLI command not mentioned in README — add it alongside `python -m tether_lite dashboard`
+#   7. "First Message" section reads like shell commands — clarify these are MCP tool calls
+#      invoked from inside an AI client (Claude Code, Codex CLI, etc.)
+#
+# LOW:
+#   8. Add missing v1.7.md to changelog/

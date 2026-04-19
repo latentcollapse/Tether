@@ -13,7 +13,41 @@ from pathlib import Path
 from tether.sqlite_runtime import SQLiteRuntime, _decode_resilient
 from tether.exceptions import TetherError
 
-DEFAULT_DASHBOARD_PORT = 5173
+DEFAULT_DASHBOARD_PORT = 3000
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _user_data_db_path() -> str:
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return os.path.join(appdata, "tether", "postoffice.db")
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return os.path.join(xdg_data_home, "tether", "postoffice.db")
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "tether", "postoffice.db")
+
+
+def _default_db_path() -> str:
+    cwd_db = Path.cwd() / "postoffice.db"
+    if cwd_db.exists():
+        return str(cwd_db)
+
+    repo_db = _repo_root() / "postoffice.db"
+    if repo_db.exists():
+        return str(repo_db)
+
+    return _user_data_db_path()
+
+
+def _ensure_db_parent(db_path: str) -> None:
+    if not db_path or db_path == ":memory:":
+        return
+    parent = Path(db_path).expanduser().resolve().parent
+    parent.mkdir(parents=True, exist_ok=True)
 
 
 def _build_parser():
@@ -21,7 +55,7 @@ def _build_parser():
         description="Tether CLI - LLM-to-LLM messaging & organization",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--db", default=os.environ.get("TETHER_DB", "tether.db"), help="Database path")
+    parser.add_argument("--db", default=os.environ.get("TETHER_DB", _default_db_path()), help="Database path")
     
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
@@ -81,13 +115,8 @@ def _dashboard_dist_dir() -> Path | None:
             return candidate
     return None
 
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
 def _dashboard_db_path() -> str:
-    return os.environ.get("TETHER_DB") or str(_repo_root() / "postoffice.db")
+    return os.environ.get("TETHER_DB") or _default_db_path()
 
 
 def _find_free_port(start_port: int = DEFAULT_DASHBOARD_PORT) -> int:
@@ -105,7 +134,9 @@ def _find_free_port(start_port: int = DEFAULT_DASHBOARD_PORT) -> int:
 
 
 def _connect_dashboard_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(_dashboard_db_path())
+    db_path = _dashboard_db_path()
+    _ensure_db_parent(db_path)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -292,8 +323,12 @@ def _create_dashboard_app(dist_dir: Path):
             runtime.close()
         return {"handle": handle}
 
+    _GHOST_AGENTS = {"unknown", "test_bridge", "dashboard"}
+
     @app.get("/api/agents")
-    def agents():
+    def agents(days: int = 2):
+        from datetime import timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
         with _connect_dashboard_db() as conn:
             rows = conn.execute(
                 """
@@ -305,7 +340,7 @@ def _create_dashboard_app(dist_dir: Path):
                 """
             ).fetchall()
 
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         agents_by_id: dict[str, dict] = {}
         edges: dict[tuple[str, str], dict] = {}
 
@@ -337,6 +372,8 @@ def _create_dashboard_app(dist_dir: Path):
         for row in rows:
             body = _decode_row_value(row)
             from_agent, to_agent = _message_agents(row, body)
+            if from_agent in _GHOST_AGENTS or to_agent in _GHOST_AGENTS:
+                continue
             created_at = str(row["created_at"])
             try:
                 row_date = datetime.fromisoformat(created_at.replace("Z", "+00:00")).date()
@@ -368,9 +405,18 @@ def _create_dashboard_app(dist_dir: Path):
             if row_date == today:
                 edge["todayCount"] += 1
 
+        active_agents = {
+            aid: a for aid, a in agents_by_id.items()
+            if a["lastSeen"] >= cutoff
+        }
+        active_edges = [
+            e for e in edges.values()
+            if e["source"] in active_agents and e["target"] in active_agents
+        ]
+
         return {
-            "agents": sorted(agents_by_id.values(), key=lambda item: item["id"]),
-            "edges": sorted(edges.values(), key=lambda item: item["count"], reverse=True),
+            "agents": sorted(active_agents.values(), key=lambda item: item["id"]),
+            "edges": sorted(active_edges, key=lambda item: item["count"], reverse=True),
         }
 
     @app.get("/api/handles")
@@ -511,10 +557,11 @@ def main():
     
     db_path = args.db
     if not os.path.exists(db_path) and args.command != "collapse":
-        workspace_db = os.environ.get("TETHER_DB", os.path.join(os.path.expanduser("~"), ".local/share/tether/tether.db"))
+        workspace_db = os.environ.get("TETHER_DB", _default_db_path())
         if os.path.exists(workspace_db):
             db_path = workspace_db
 
+    _ensure_db_parent(db_path)
     rt = SQLiteRuntime(db_path=db_path)
     
     try:
