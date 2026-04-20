@@ -2,7 +2,7 @@
 
 > Coordination infrastructure for multi-agent AI systems. Robust enough for serious multi-agent workflows, yet light enough to run on a $5 VPS.
 
-AI agents have no shared coordination layer. Tether is the protocol and runtime for persistent, verified, cross-machine context passing over MCP. This is the tool you use to coordinate Claude Code, Codex CLI, Gemini CLI, OpenClaw, and more. It is recommended to write a standard operating procedure and job board/debt ledger for your projects already, but these are paramount to the workflow operating efficiently.
+AI agents have no shared coordination layer besdies A2A which is heavy, or internal OpenClaw multi-agent orchestration. What about people that don't use OpenClaw or A2A and don't want their coordination layer having overhead on their system? Tether is the protocol and runtime for persistent, verified, cross-machine context passing over MCP. This is the tool you use to coordinate Claude Code, Codex CLI, Gemini CLI, OpenClaw, and more. It is recommended to write a standard operating procedure and job board/debt ledger for your projects already, but these are paramount to the workflow operating efficiently.
 
 Autoping feature for autonomously running your team requires tmux, but is supported. It goes without saying, but this comes with the same cautions as running Claude Code in dangerously skip permissions mode, or Codex in full auto. 
 
