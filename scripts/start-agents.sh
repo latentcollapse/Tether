@@ -20,6 +20,14 @@ start_session() {
         tmux new-session -d -s "$name" -c "$WORKDIR" "$cmd"
         echo "  [$name] started"
     fi
+    # Create pane pin file for Tether ping daemon discovery
+    sleep 1
+    local pane_id
+    pane_id=$(tmux list-panes -t "$name" -F "#{pane_id}" 2>/dev/null | head -1)
+    if [ -n "$pane_id" ]; then
+        echo "$pane_id" > "/tmp/tether-pane-$name"
+        echo "  [$name] pin file created (pane: $pane_id)"
+    fi
 }
 
 echo "Starting agent sessions..."
