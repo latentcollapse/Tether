@@ -7,8 +7,9 @@ import os
 import socket
 import sqlite3
 import sys
+import urllib.request
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from tether.sqlite_runtime import SQLiteRuntime, _decode_resilient
 from tether.exceptions import TetherError
@@ -50,6 +51,63 @@ def _ensure_db_parent(db_path: str) -> None:
     parent.mkdir(parents=True, exist_ok=True)
 
 
+def _send_message_with_ping(
+    runtime: SQLiteRuntime,
+    *,
+    to_agent: str,
+    subject: str,
+    text: str,
+    from_agent: str,
+    tags: list[str] | None = None,
+    ttl_seconds: int | None = None,
+    ticket_id: str | None = None,
+) -> str:
+    value = {
+        "from": from_agent,
+        "to": to_agent,
+        "subject": subject,
+        "text": text,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    handle = runtime.collapse(
+        "messages",
+        value,
+        ttl_seconds=ttl_seconds,
+        owner=to_agent,
+        tags=tags,
+        sender=from_agent,
+        ticket_id=ticket_id,
+    )
+    ping_url = runtime.get_ping_url(to_agent)
+    if ping_url:
+        payload = json.dumps({
+            "event": "tether_message",
+            "to": to_agent,
+            "from": from_agent,
+            "subject": subject,
+            "handle": handle,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            ping_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=2):
+                pass
+        except Exception:
+            # HTTP blocked (sandboxed process) — fall back to notify file
+            # which PROMPT_COMMAND picks up on the recipient's next render.
+            try:
+                notify_path = os.path.join(os.path.expanduser("~"), ".tether_notify")
+                with open(notify_path, "w", encoding="utf-8") as f:
+                    f.write(f"[Tether] From agent: {from_agent}  Handle: '{handle}'\n")
+            except Exception:
+                pass
+    return handle
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description="Tether CLI - LLM-to-LLM messaging & organization",
@@ -66,6 +124,16 @@ def _build_parser():
     collapse_parser.add_argument("--owner", help="Set handle owner")
     collapse_parser.add_argument("--tags", help="Comma-separated tags")
     collapse_parser.add_argument("--ttl", type=int, help="TTL in seconds")
+
+    # send command
+    send_parser = subparsers.add_parser("send", help="Send a message and trigger recipient autoping")
+    send_parser.add_argument("to", help="Recipient agent name")
+    send_parser.add_argument("subject", help="Message subject")
+    send_parser.add_argument("text", help="Message body")
+    send_parser.add_argument("--from-agent", default="unknown", help="Sender agent name")
+    send_parser.add_argument("--tags", help="Comma-separated tags")
+    send_parser.add_argument("--ttl", type=int, help="TTL in seconds")
+    send_parser.add_argument("--ticket-id", help="Optional ticket ID")
     
     # resolve command
     resolve_parser = subparsers.add_parser("resolve", help="Resolve handle to value")
@@ -302,20 +370,15 @@ def _create_dashboard_app(dist_dir: Path):
         text = str(payload.get("text") or "").strip()
         if not to_agent or not subject or not text:
             raise HTTPException(status_code=400, detail="to, subject, and text are required")
-        value = {
-            "from": str(payload.get("from") or "dashboard"),
-            "to": to_agent,
-            "subject": subject,
-            "text": text,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
         ticket_id = str(payload.get("ticketId") or "").strip() or None
         runtime = SQLiteRuntime(db_path=_dashboard_db_path())
         try:
-            handle = runtime.collapse(
-                "messages",
-                value,
-                owner=value["from"],
+            handle = _send_message_with_ping(
+                runtime,
+                to_agent=to_agent,
+                subject=subject,
+                text=text,
+                from_agent=str(payload.get("from") or "dashboard"),
                 tags=["dashboard"],
                 ticket_id=ticket_id,
             )
@@ -571,7 +634,21 @@ def main():
             tags = args.tags.split(",") if args.tags else None
             handle = rt.collapse(args.table, value, ttl_seconds=args.ttl, owner=args.owner, tags=tags)
             print(handle)
-        
+
+        elif args.command == "send":
+            tags = args.tags.split(",") if args.tags else None
+            handle = _send_message_with_ping(
+                rt,
+                to_agent=args.to,
+                subject=args.subject,
+                text=args.text,
+                from_agent=args.from_agent,
+                tags=tags,
+                ttl_seconds=args.ttl,
+                ticket_id=args.ticket_id,
+            )
+            print(handle)
+
         elif args.command == "resolve":
             value = rt.resolve(args.handle, for_agent=args.agent)
             if args.pretty:

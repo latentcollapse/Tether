@@ -116,9 +116,8 @@ async def _fire_ping(url: str, payload: dict):
     """Notify an agent of a new message.
 
     Strategy (in order):
-    1. tmux send-keys into the agent's named session (session name = payload["to"])
-       — activates the agent immediately with no polling
-    2. HTTP POST to registered URL as fallback (for non-tmux setups)
+    1. HTTP POST to daemon (preferred — daemon has idle detection, only injects when agent is ready)
+    2. tmux send-keys into the agent's named session (fallback — no idle detection, fires immediately)
 
     Both are best-effort — never fail the send.
     """
@@ -134,14 +133,20 @@ async def _fire_ping(url: str, payload: dict):
         # Always write notify file — shell prompt picks this up on next render
         await loop.run_in_executor(None, lambda: _write_notify(handle, sender, subject))
 
-        # 1. tmux injection (preferred — fully autonomous)
-        injected = await loop.run_in_executor(None, lambda: _tmux_inject(agent, prompt))
+        # 1. HTTP daemon (preferred — idle-aware injection)
+        pinged = False
+        if url:
+            try:
+                data = json.dumps(payload).encode()
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
+                pinged = True
+            except Exception:
+                pass
 
-        # 2. HTTP fallback
-        if not injected and url:
-            data = json.dumps(payload).encode()
-            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-            await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
+        # 2. tmux fallback — only when no daemon responded
+        if not pinged:
+            await loop.run_in_executor(None, lambda: _tmux_inject(agent, prompt))
     except Exception:
         pass  # ping is best-effort — never fail the send
 

@@ -34,10 +34,14 @@ IDLE_PATTERNS = [
     re.compile(r'\u276f\s*$'),              # Claude Code ❯ prompt
     re.compile(r'\u25c7\s*$'),              # Codex CLI ◇ idle prompt
     re.compile(r'\u203a\s*$'),              # Codex CLI › input prompt
-    re.compile(r'Waiting for your input'),   # Claude Code idle text
+    re.compile(r'Waiting for your input'),   # Claude Code idle text (legacy)
+    re.compile(r'bypass permissions'),       # Claude Code active session toolbar
+    re.compile(r'auto-compact'),             # Claude Code session status bar
+    re.compile(r'esc to interrupt'),         # Claude Code interrupt hint
     re.compile(r'^\?\s*$'),                  # Claude Code ? prompt
     re.compile(r'Ready'),                    # Codex CLI "◇  Ready" state
     re.compile(r'gpt-'),                     # Codex CLI status line
+    re.compile(r'Type your message'),        # Codex CLI input prompt
 ]
 
 AGENT_PATTERNS = {
@@ -45,6 +49,8 @@ AGENT_PATTERNS = {
         re.compile(r'gpt-', re.IGNORECASE),
         re.compile(r'\u203a'),
         re.compile(r'codex', re.IGNORECASE),
+        re.compile(r'\u25c7'),
+        re.compile(r'Ready', re.IGNORECASE),
     ],
     "gemini": [
         re.compile(r'gemini', re.IGNORECASE),
@@ -56,6 +62,10 @@ AGENT_PATTERNS = {
     ],
     "kilo": [
         re.compile(r'kilo', re.IGNORECASE),
+    ],
+    "deepseek": [
+        re.compile(r'deepseek', re.IGNORECASE),
+        re.compile(r'hermes', re.IGNORECASE),
     ],
 }
 
@@ -233,6 +243,15 @@ def pane_matches_agent(pane: str, agent: str) -> bool:
 
 def resolve_pane(agent: str) -> str:
     try:
+        pin_file = f"/tmp/tether-pane-{agent}"
+        if os.path.exists(pin_file):
+            try:
+                pinned = open(pin_file).read().strip()
+                if pinned and pane_exists(pinned):
+                    return pinned
+            except Exception:
+                pass
+
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
             capture_output=True, text=True, timeout=5,
@@ -393,7 +412,11 @@ class PingHandler(BaseHTTPRequestHandler):
             data = json.loads(body)
             sender = data.get("from", "unknown")
             handle = data.get("handle", "")
-            notification = f"[Tether] From agent: {sender}  Handle: '{handle}'"
+            subject = data.get("subject", "")
+            if subject:
+                notification = f"[Tether] {sender}: {subject}  Handle: '{handle}'"
+            else:
+                notification = f"[Tether] From agent: {sender}  Handle: '{handle}'"
             update_state(self.state, last_ping_at=now_iso())
 
             # Buffer file for observability
