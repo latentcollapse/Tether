@@ -1,23 +1,32 @@
 # Tether
 
-> Coordination infrastructure for multi-agent AI systems. Robust enough for serious multi-agent workflows, yet light enough to run on a $5 VPS.
+> Async messaging for CLI processes. Send a message from your phone; your terminal picks it up.
 
-AI agents have no shared coordination layer besdies A2A which is heavy, or internal OpenClaw multi-agent orchestration. What about people that don't use OpenClaw or A2A and don't want their coordination layer having overhead on their system? Tether is the protocol and runtime for persistent, verified, cross-machine context passing over MCP. This is the tool you use to coordinate Claude Code, Codex CLI, Gemini CLI, OpenClaw, and more. It is recommended to write a standard operating procedure and job board/debt ledger for your projects already, but these are paramount to the workflow operating efficiently.
+Tether is a CLI-to-CLI messaging layer. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build system, a monitoring script, or a human at a terminal. If it has a CLI, it has a Tether inbox.
 
-Autoping feature for autonomously running your team requires tmux, but is supported. It goes without saying, but this comes with the same cautions as running Claude Code in dangerously skip permissions mode, or Codex in full auto. 
+This makes it fundamentally different from agent-to-agent orchestration frameworks, which are designed for service discovery and RPC between running API servers. Tether is async, persistent, and CLI-native. The canonical use case is coordinating Claude Code, Codex CLI, Gemini CLI, and similar tools across a local machine or across machines — but the protocol has no AI dependency.
+
+It is recommended to maintain a standard operating procedure and job board for your project. These are not required, but they make multi-session workflows significantly more reliable.
+
+The autoping feature for autonomous agent wake-up requires tmux. It carries the same cautions as running any AI CLI in full-auto mode.
 
 Tether has two operating modes:
 
 - `TetherLite`: local-first, free forever, no relay required
-- `Tether Cloud`: relay-backed delivery when agents need to communicate across machines
+- `Tether Cloud`: relay-backed delivery across machines
 
 The same handle format, the same MCP tool names, and the same basic workflow apply in both.
 
+## The Mobile Angle *(Planned feature, not yet implemented)*
+
+Once you add a relay (self-hosted or Tether Cloud), Tether becomes a remote control for your local machine. Send a message from your phone, your tablet, or any browser. As long as the machine is on and the agent is running, it lands in the inbox and gets processed. No cloud middleman, no OAuth flow, no vendor dependency. It works like async email for your dev environment.
+
 ## What Tether Is Not
 
-- Not a compression tool. Handles are deterministic pointers, not compressed payloads.
-- Not a generic storage service. TetherLite stores local data on your machine; relay-backed cross-machine delivery stores routing metadata and encrypted ciphertext envelopes, not plaintext.
-- Not tied to one model vendor. Tether is MCP-native and LLM-agnostic.
+- Not an agent-to-agent orchestration framework. Tether does not handle service discovery, capability negotiation, or RPC between running servers.
+- Not a compression tool. Handles are deterministic content-addressed pointers, not compressed payloads.
+- Not a generic storage service. TetherLite keeps data local; the relay stores encrypted envelopes and routing metadata, not plaintext.
+- Not tied to one model vendor. Tether is MCP-native and model-agnostic.
 
 ## How It Works
 
@@ -85,11 +94,9 @@ Default `TETHER_DB` locations:
 
 All agents sharing the same machine should point to the same database file.
 
-For the TOML-backed local runtime, point tools at `tether_lite` instead of the SQLite runtime where appropriate.
-
 ### First Message
 
-These are MCP tool calls invoked from inside an AI client such as Claude Code, Codex CLI, or OpenClaw. They are not shell commands.
+These are MCP tool calls invoked from inside an AI client such as Claude Code, Codex CLI, or any MCP-compatible process. They are not shell commands.
 
 ```text
 tether_send to="codex" subject="status" text="What changed?"
@@ -213,7 +220,7 @@ Tether is designed around bounded trust:
 - Public-key fetch and decryption happen on the client side.
 - AGPL source keeps the transport and storage claims auditable.
 
-This is not “the relay sees nothing at all.” It is “the relay never sees plaintext application payloads.”
+This is not "the relay sees nothing at all." It is "the relay never sees plaintext application payloads."
 
 ## Changelog
 
