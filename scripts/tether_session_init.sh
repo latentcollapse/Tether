@@ -19,7 +19,19 @@ tmux rename-session -t 0 claude 2>/dev/null && echo "  session 0 -> claude" || e
 tmux rename-session -t 1 codex  2>/dev/null && echo "  session 1 -> codex"  || echo "  session codex already named or missing"
 tmux rename-session -t 2 gemini 2>/dev/null && echo "  session 2 -> gemini" || echo "  session gemini already named or missing"
 
-# Pin pane IDs for daemon idle detection
+# Pin pane IDs — written to persistent config (survives reboots) and /tmp (session override)
+PINS_DIR="$HOME/.config/tether"
+PINS_FILE="$PINS_DIR/pane_pins.json"
+mkdir -p "$PINS_DIR"
+cat > "$PINS_FILE" <<'EOF'
+{
+  "claude": "%0",
+  "codex": "%1",
+  "gemini": "%2"
+}
+EOF
+echo "  pane pins saved to $PINS_FILE"
+
 echo "%0" > /tmp/tether-pane-claude
 echo "%1" > /tmp/tether-pane-codex
 echo "%2" > /tmp/tether-pane-gemini

@@ -28,6 +28,26 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 DEFAULT_DESKTOP_NOTIFY_AGENTS = {"openclaw"}
 
+PERSISTENT_PINS_PATH = os.path.expanduser("~/.config/tether/pane_pins.json")
+
+
+def load_persistent_pins() -> dict[str, str]:
+    try:
+        with open(PERSISTENT_PINS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k.lower(): v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_persistent_pin(agent: str, pane: str) -> None:
+    os.makedirs(os.path.dirname(PERSISTENT_PINS_PATH), exist_ok=True)
+    pins = load_persistent_pins()
+    pins[agent.lower()] = pane
+    with open(PERSISTENT_PINS_PATH, "w", encoding="utf-8") as f:
+        json.dump(pins, f, indent=2)
+        f.write("\n")
+
 IDLE_PATTERNS = [
     re.compile(r'\$\s*$'),                   # bash/zsh prompt
     re.compile(r'>\s*$'),                    # Qwen Code / Gemini idle prompt
@@ -243,6 +263,7 @@ def pane_matches_agent(pane: str, agent: str) -> bool:
 
 def resolve_pane(agent: str) -> str:
     try:
+        # 1. /tmp session override — highest priority, dynamic, tmux-lifecycle
         pin_file = f"/tmp/tether-pane-{agent}"
         if os.path.exists(pin_file):
             try:
@@ -251,6 +272,11 @@ def resolve_pane(agent: str) -> str:
                     return pinned
             except Exception:
                 pass
+
+        # 2. Persistent config — survives reboots
+        persistent = load_persistent_pins().get(agent.lower(), "")
+        if persistent and pane_exists(persistent):
+            return persistent
 
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
