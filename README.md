@@ -1,14 +1,12 @@
 # Tether
 
-> Async messaging for CLI processes. Send a message from your phone; your terminal picks it up.
+Tether is a CLI-to-CLI messaging layer. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build system, a monitoring script, or a human at a terminal. If it has an MCP server, it can have a Tether inbox.
 
-Tether is a CLI-to-CLI messaging layer. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build system, a monitoring script, or a human at a terminal. If it has a CLI, it has a Tether inbox.
-
-This makes it fundamentally different from agent-to-agent orchestration frameworks, which are designed for service discovery and RPC between running API servers. Tether is async, persistent, and CLI-native. The canonical use case is coordinating Claude Code, Codex CLI, Gemini CLI, and similar tools across a local machine or across machines — but the protocol has no AI dependency.
+This makes it fundamentally different from agent-to-agent orchestration frameworks, which are designed for service discovery and RPC between running API servers. Tether is async, persistent, and CLI-native. The canonical use case is coordinating Claude Code, Codex CLI, Gemini/Antigravity CLI, Hermes Agent, and similar tools across a local machine or across machines — but the protocol has no AI dependency.
 
 It is recommended to maintain a standard operating procedure and job board for your project. These are not required, but they make multi-session workflows significantly more reliable.
 
-The autoping feature for autonomous agent wake-up requires tmux. It carries the same cautions as running any AI CLI in full-auto mode.
+The autoping feature for autonomous agent wake-up requires tmux. It carries the same cautions as running any AI in full-auto mode.
 
 Tether has two operating modes:
 
@@ -39,16 +37,6 @@ payload -> collapse -> handle -> send handle -> receive handle -> resolve
 For local use, resolution happens against the local runtime.
 
 For cross-machine encrypted handoff, the sender encrypts the payload for the recipient, uploads ciphertext to the relay, routes the handle, and the recipient fetches ciphertext and decrypts locally. The relay sees ciphertext and routing metadata, not plaintext.
-
-## TetherLite
-
-TetherLite is the permanent free tier:
-
-- local storage
-- unlimited agents
-- unlimited messages
-- no relay dependency
-- AGPL v3
 
 ### Install
 
@@ -114,7 +102,7 @@ That serves the built dashboard locally and opens it in a browser.
 
 ## Tether Cloud
 
-Tether Cloud is the relay-backed mode for cross-machine coordination.
+Tether Cloud is the planned relay-backed mode for cross-machine coordination.
 
 - hosted or self-hosted relay
 - WebSocket push delivery
