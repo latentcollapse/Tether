@@ -3,6 +3,8 @@
 ## Foreword from me, Matt
 Tether has single handedly kept a multi-agent novel programming language project coherent. My scatter-brain would've dumpstered something like this a long time ago, but it completely removes the need to keep track of a lot of minor things and your tickets and prompts can be structured by your coordinator model, enabling you to fundamentally work with one, but control an entire team through what's essentially a stripped down JIRA board. It's become a huge part of my workflow and has helped hold my projects together. I hope you all get as good of use out of it as I am.
 
+## What it actually is
+
 Tether is a CLI-to-CLI messaging layer. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build system, a monitoring script, or a human at a terminal. If it has an MCP server, it can have a Tether inbox.
 
 This makes it fundamentally different from agent-to-agent orchestration frameworks, which are designed for service discovery and RPC between running API servers. Tether is async, persistent, and CLI-native. The canonical use case is coordinating Claude Code, Codex CLI, Gemini/Antigravity CLI, Hermes Agent, and similar tools across a local machine or across machines — but the protocol has no AI dependency.
