@@ -52,6 +52,14 @@ def find_dashboard_dist() -> Path | None:
 
 def launch_dashboard() -> int:
     """Serve the built dashboard with the full API backend."""
+    try:
+        from fastapi import FastAPI
+        import uvicorn
+    except ImportError:
+        sys.stderr.write("Error: Dashboard dependencies missing. Please install fastapi and uvicorn:\n")
+        sys.stderr.write("  pip install fastapi uvicorn\n")
+        return 1
+
     from tether.__main__ import _create_dashboard_app, _dashboard_db_path, _dashboard_dist_dir
 
     dist_dir = _dashboard_dist_dir() or find_dashboard_dist()
@@ -59,15 +67,27 @@ def launch_dashboard() -> int:
         sys.stdout.write("Run `npm run build` in tether-dashboard/ first\n")
         return 1
 
-    port = find_open_port()
-    url = f"http://localhost:{port}"
+    host = os.environ.get("TETHER_HOST", "127.0.0.1")
+    port_env = os.environ.get("TETHER_PORT")
+    if port_env:
+        try:
+            port = int(port_env)
+        except ValueError:
+            sys.stderr.write(f"Invalid TETHER_PORT: {port_env}\n")
+            return 1
+    else:
+        port = find_open_port()
+
+    url = f"http://{host}:{port}"
     app = _create_dashboard_app(dist_dir)
-    _open_browser(url)
+    
+    if host in {"127.0.0.1", "localhost"} and os.environ.get("TETHER_HEADLESS") != "1":
+        _open_browser(url)
+        
     sys.stdout.write(f"Tether dashboard running at {url} — Ctrl+C to stop\n")
     sys.stdout.flush()
     try:
-        import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning")
     except KeyboardInterrupt:
         pass
     return 0

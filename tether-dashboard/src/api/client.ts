@@ -124,6 +124,97 @@ class ApiClient {
       body: JSON.stringify(payload),
     });
   }
+
+  async getTickets(filters?: { category?: string; tier?: string; status?: string; owner?: string; batch?: string; sort?: string }) {
+    this.validateSession();
+    const cleanFilters = Object.fromEntries(
+      Object.entries(filters || {}).filter(([_, v]) => v !== undefined && v !== '')
+    );
+    const query = new URLSearchParams(cleanFilters as any).toString();
+    return fetchJson<{ tickets: any[] }>(`/board/tickets${query ? '?' + query : ''}`);
+  }
+
+  async getChangelog(query?: string) {
+    this.validateSession();
+    return fetchJson<{ changelog: any[] }>(`/board/changelog${query ? '?query=' + encodeURIComponent(query) : ''}`);
+  }
+
+  async claimTicket(id: string, actor: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string; owner: string }>('/board/claim', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor }),
+    });
+  }
+
+  async flagTicket(id: string, actor: string, work_done: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string; work_done: string }>('/board/flag', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor, work_done }),
+    });
+  }
+
+  async proposeTicket(category: string, tier: string, title: string, description: string, actor: string) {
+    this.validateSession();
+    return fetchJson<{ handle: string; status: string }>('/board/propose', {
+      method: 'POST',
+      body: JSON.stringify({ category, tier, title, description, from_agent: actor }),
+    });
+  }
+
+  async acceptTicket(id: string, actor: string, tier?: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string }>('/board/accept', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor, tier }),
+    });
+  }
+
+  async authorTicket(payload: { category: string; tier: string; title: string; description: string; from_agent: string; status?: string; batch?: string; principle?: string[]; bible_ref?: string[]; gate?: string; blocks?: string[]; blocked_by?: string[] }) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string }>('/board/author', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async finalizeTicket(id: string, actor: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string; changelog_handle: string }>('/board/finalize', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor }),
+    });
+  }
+
+  async dormantTicket(id: string, actor: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string }>('/board/dormant', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor }),
+    });
+  }
+
+  async reviveTicket(id: string, actor: string) {
+    this.validateSession();
+    return fetchJson<{ id: string; status: string }>('/board/revive', {
+      method: 'POST',
+      body: JSON.stringify({ id, from_agent: actor }),
+    });
+  }
+
+  async getWhiteboard() {
+    this.validateSession();
+    return fetchJson<{ content: string }>('/board/whiteboard');
+  }
+
+  async updateWhiteboard(content: string) {
+    this.validateSession();
+    return fetchJson<{ success: boolean }>('/board/whiteboard', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+  }
 }
 
 export const api = new ApiClient();

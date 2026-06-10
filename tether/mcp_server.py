@@ -590,6 +590,153 @@ async def list_tools() -> list[Tool]:
                 "required": ["agent", "enabled"]
             }
         ),
+        Tool(
+            name="board_query",
+            description="Query the smart board for tickets with optional filters.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Filter by category (B, F, D, G, M, R)"},
+                    "tier": {"type": "string", "description": "Filter by difficulty tier (grey, green, blue, yellow, orange, red, purple)"},
+                    "status": {"type": "string", "description": "Filter by status (open, active, ready, done, proposed)"},
+                    "owner": {"type": "string", "description": "Filter by ticket owner"},
+                    "batch": {"type": "string", "description": "Filter by batch grouping"},
+                    "sort": {"type": "string", "description": "Sort order ('newest' or 'oldest')", "default": "newest"}
+                }
+            }
+        ),
+        Tool(
+            name="board_get",
+            description="Get details and history/lineage of a single ticket by its ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID (e.g. 'B-7')"}
+                },
+                "required": ["id"]
+            }
+        ),
+        Tool(
+            name="board_claim",
+            description="Claim an open ticket, moving it to active state.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID to claim"},
+                    "from_agent": {"type": "string", "description": "Your agent handle"}
+                },
+                "required": ["id", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_flag",
+            description="Flag an active ticket as inspection-ready, providing a summary of work done.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID to flag"},
+                    "from_agent": {"type": "string", "description": "Your agent handle"},
+                    "work_done": {"type": "string", "description": "Summary of work done / completion artifact"}
+                },
+                "required": ["id", "from_agent", "work_done"]
+            }
+        ),
+        Tool(
+            name="board_propose",
+            description="Propose a new ticket (executor-discovered debt) into the proposed holding state.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Category (B, F, D, G, M, R)"},
+                    "tier": {"type": "string", "description": "Difficulty tier (grey, green, blue, yellow, orange, red, purple)"},
+                    "title": {"type": "string", "description": "Ticket title"},
+                    "description": {"type": "string", "description": "Ticket description"},
+                    "from_agent": {"type": "string", "description": "Your agent handle"}
+                },
+                "required": ["category", "tier", "title", "description", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_author",
+            description="Admin-only: Create/author a ticket directly onto the board with an auto-assigned ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Category (B, F, D, G, M, R, S)"},
+                    "tier": {"type": "string", "description": "Difficulty tier (blue, yellow, orange, red, purple)"},
+                    "title": {"type": "string", "description": "Ticket title"},
+                    "description": {"type": "string", "description": "Ticket description"},
+                    "from_agent": {"type": "string", "description": "Your agent handle (must be admin)"},
+                    "status": {"type": "string", "description": "Optional initial status (open, dormant)", "default": "open"},
+                    "batch": {"type": "string", "description": "Optional batch grouping"},
+                    "principle": {"type": "array", "items": {"type": "string"}, "description": "Optional principles served"},
+                    "bible_ref": {"type": "array", "items": {"type": "string"}, "description": "Optional bible spec references"},
+                    "gate": {"type": "string", "description": "Optional gate code closed by this ticket"},
+                    "blocks": {"type": "array", "items": {"type": "string"}, "description": "Optional tickets blocked by this ticket"},
+                    "blocked_by": {"type": "array", "items": {"type": "string"}, "description": "Optional tickets blocking this ticket"}
+                },
+                "required": ["category", "tier", "title", "description", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_accept",
+            description="Admin-only: Accept a proposed ticket, assigning it a real ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Temporary ID/handle of the proposed ticket"},
+                    "from_agent": {"type": "string", "description": "Your agent handle (must be admin)"},
+                    "tier": {"type": "string", "description": "Optional tier override"}
+                },
+                "required": ["id", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_finalize",
+            description="Admin-only: Finalize a ready ticket, moving it to done and archiving in the changelog. separation of duties applies.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID to finalize"},
+                    "from_agent": {"type": "string", "description": "Your agent handle (must be admin, and cannot be an implementer)"}
+                },
+                "required": ["id", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_dormant",
+            description="Admin-only: Mark a ticket as dormant.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID to mark dormant"},
+                    "from_agent": {"type": "string", "description": "Your agent handle (must be admin)"}
+                },
+                "required": ["id", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_revive",
+            description="Admin-only: Revive a dormant ticket, moving it back to open status.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Ticket ID to revive"},
+                    "from_agent": {"type": "string", "description": "Your agent handle (must be admin)"}
+                },
+                "required": ["id", "from_agent"]
+            }
+        ),
+        Tool(
+            name="board_changelog",
+            description="Search the completed-ticket changelog archive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                }
+            }
+        ),
     ]
 
 
@@ -878,6 +1025,151 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if status is None:
                 return [TextContent(type="text", text=json.dumps({"error": "no ping endpoint registered for this agent"}))]
             return [TextContent(type="text", text=json.dumps({"status": "updated", "ping": status}))]
+
+        elif name == "board_query":
+            tickets = runtime.board_query(
+                category=arguments.get("category"),
+                tier=arguments.get("tier"),
+                status=arguments.get("status"),
+                owner=arguments.get("owner"),
+                batch=arguments.get("batch"),
+                sort=arguments.get("sort", "newest")
+            )
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode(tickets))]
+
+        elif name == "board_get":
+            ticket_id = arguments["id"]
+            tickets = runtime.board_query()
+            ticket = next((t for t in tickets if t["id"] == ticket_id), None)
+            if not ticket:
+                return [TextContent(type="text", text=f"Ticket not found: {ticket_id}")]
+                
+            events = []
+            events_cursor = runtime._conn.execute(
+                "SELECT handle, lc_bytes, created_at, sender FROM tether_handles WHERE table_name = 'board'"
+            )
+            for r in events_cursor.fetchall():
+                try:
+                    from tether.lc import decode_lc_b
+                    from tether.runtime import contract_to_json
+                    contract_val = decode_lc_b(r["lc_bytes"])
+                    ev = contract_to_json(contract_val)
+                except Exception:
+                    try:
+                        ev = json.loads(r["lc_bytes"].decode("utf-8"))
+                    except Exception:
+                        continue
+                if ev.get("ticket_id") == ticket_id or ev.get("proposed_id") == ticket_id or ev.get("handle") == r["handle"]:
+                    ev["handle"] = r["handle"]
+                    events.append({
+                        "handle": r["handle"],
+                        "type": ev.get("type"),
+                        "actor": ev.get("actor") or r["sender"],
+                        "timestamp": ev.get("timestamp") or r["created_at"],
+                        "work_done": ev.get("work_done", "")
+                    })
+            events.sort(key=lambda x: x.get("timestamp", ""))
+            
+            result = {
+                "ticket": ticket,
+                "lineage": events
+            }
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode(result))]
+
+        elif name == "board_claim":
+            ticket_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            runtime.board_claim(ticket_id, actor)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": ticket_id, "status": "claimed", "owner": actor}))]
+
+        elif name == "board_flag":
+            ticket_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            work_done = arguments["work_done"]
+            runtime.board_flag(ticket_id, actor, work_done)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": ticket_id, "status": "ready", "work_done": work_done}))]
+
+        elif name == "board_propose":
+            category = arguments["category"]
+            tier = arguments["tier"]
+            title = arguments["title"]
+            description = arguments["description"]
+            actor = arguments.get("from_agent") or "unknown"
+            handle = runtime.board_propose(category, tier, title, description, actor)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"handle": handle, "status": "proposed"}))]
+
+        elif name == "board_accept":
+            proposed_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            tier = arguments.get("tier")
+            if actor not in ["claude", "matt"]:
+                raise ValueError("Permission denied: only admins can accept proposed tickets.")
+            real_id = runtime.board_accept(proposed_id, actor, tier)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": real_id, "status": "accepted"}))]
+
+        elif name == "board_author":
+            category = arguments["category"]
+            tier = arguments["tier"]
+            title = arguments["title"]
+            description = arguments["description"]
+            actor = arguments.get("from_agent") or "unknown"
+            if actor not in ["claude", "matt"]:
+                raise ValueError("Permission denied: only admins can author tickets directly.")
+            status = arguments.get("status", "open")
+            real_id = runtime.board_author(
+                category=category,
+                tier=tier,
+                title=title,
+                description=description,
+                actor=actor,
+                batch=arguments.get("batch"),
+                principle=arguments.get("principle"),
+                bible_ref=arguments.get("bible_ref"),
+                gate=arguments.get("gate"),
+                blocks=arguments.get("blocks"),
+                blocked_by=arguments.get("blocked_by"),
+                status=status
+            )
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": real_id, "status": status}))]
+
+        elif name == "board_dormant":
+            ticket_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            if actor not in ["claude", "matt"]:
+                raise ValueError("Permission denied: only admins can mark tickets as dormant.")
+            runtime.board_dormant(ticket_id, actor)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": ticket_id, "status": "dormant"}))]
+
+        elif name == "board_revive":
+            ticket_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            if actor not in ["claude", "matt"]:
+                raise ValueError("Permission denied: only admins can revive tickets.")
+            runtime.board_revive(ticket_id, actor)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": ticket_id, "status": "open"}))]
+
+        elif name == "board_finalize":
+            ticket_id = arguments["id"]
+            actor = arguments.get("from_agent") or "unknown"
+            if actor not in ["claude", "matt"]:
+                raise ValueError("Permission denied: only admins can finalize tickets.")
+            changelog_handle = runtime.board_finalize(ticket_id, actor)
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode({"id": ticket_id, "status": "done", "changelog_handle": changelog_handle}))]
+
+        elif name == "board_changelog":
+            changelog = runtime.board_changelog_query(query_str=arguments.get("query"))
+            from tether.toon import encode as toon_encode
+            return [TextContent(type="text", text=toon_encode(changelog))]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

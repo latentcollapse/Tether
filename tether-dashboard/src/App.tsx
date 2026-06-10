@@ -4,11 +4,12 @@ import { Layout } from './components/layout/Layout';
 import { LoadingSpinner } from './components/shared/LoadingSpinner';
 import { LoginView } from './views/LoginView';
 import { NetworkView } from './views/NetworkView';
-import { HandleBrowserView } from './views/HandleBrowserView';
 import { ConnectionView } from './views/ConnectionView';
 import { UsageView } from './views/UsageView';
 import { MessagesView } from './views/MessagesView';
 import { SettingsView } from './views/SettingsView';
+import { JobBoardView } from './views/JobBoardView';
+import { ChangelogView } from './views/ChangelogView';
 import { api } from './api/client';
 import { useAuthStore } from './store/authStore';
 
@@ -79,7 +80,8 @@ export default function App() {
           <Route path="/" element={<NetworkView />} />
           <Route path="/messages" element={<MessagesView />} />
           <Route path="/connection" element={<ConnectionView />} />
-          <Route path="/handles" element={<HandleBrowserView />} />
+          <Route path="/board" element={<JobBoardView />} />
+          <Route path="/changelog" element={<ChangelogView />} />
           <Route path="/usage" element={<UsageView />} />
           <Route path="/settings" element={<SettingsView />} />
         </Route>

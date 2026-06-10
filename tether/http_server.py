@@ -198,6 +198,25 @@ class TetherHTTPHandler(BaseHTTPRequestHandler):
                 rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
                 _json_response(self, {"thread": thread_name, "count": len(rows), "messages": rows})
 
+            elif path == "/board/tickets":
+                params = parse_qs(parsed.query)
+                tickets = rt.board_query(
+                    category=params.get("category", [None])[0],
+                    tier=params.get("tier", [None])[0],
+                    status=params.get("status", [None])[0],
+                    owner=params.get("owner", [None])[0],
+                    batch=params.get("batch", [None])[0],
+                    sort=params.get("sort", ["newest"])[0]
+                )
+                _json_response(self, {"tickets": tickets})
+                
+            elif path == "/board/changelog":
+                params = parse_qs(parsed.query)
+                changelog = rt.board_changelog_query(
+                    query_str=params.get("query", [None])[0]
+                )
+                _json_response(self, {"changelog": changelog})
+
             else:
                 _json_response(self, {"error": "not found", "path": path}, 404)
 
@@ -266,6 +285,138 @@ class TetherHTTPHandler(BaseHTTPRequestHandler):
                     sender=data["from_agent"],
                 )
                 _json_response(self, {"handle": handle, "status": "sent", "thread": data["thread"]})
+
+            elif path == "/board/propose":
+                required = {"category", "tier", "title", "description", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                handle = rt.board_propose(
+                    category=data["category"],
+                    tier=data["tier"],
+                    title=data["title"],
+                    description=data["description"],
+                    actor=data["from_agent"]
+                )
+                _json_response(self, {"handle": handle, "status": "proposed"})
+
+            elif path == "/board/accept":
+                required = {"id", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                actor = data["from_agent"]
+                if actor not in ["claude", "matt"]:
+                    _json_response(self, {"error": "unauthorized", "message": "Only admins can accept proposed tickets"}, 403)
+                    return
+                real_id = rt.board_accept(
+                    proposed_id=data["id"],
+                    actor=actor,
+                    tier=data.get("tier")
+                )
+                _json_response(self, {"id": real_id, "status": "accepted"})
+
+            elif path == "/board/author":
+                required = {"category", "tier", "title", "description", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                actor = data["from_agent"]
+                if actor not in ["claude", "matt"]:
+                    _json_response(self, {"error": "unauthorized", "message": "Only admins can author tickets directly"}, 403)
+                    return
+                status = data.get("status", "open")
+                real_id = rt.board_author(
+                    category=data["category"],
+                    tier=data["tier"],
+                    title=data["title"],
+                    description=data["description"],
+                    actor=actor,
+                    batch=data.get("batch"),
+                    principle=data.get("principle"),
+                    bible_ref=data.get("bible_ref"),
+                    gate=data.get("gate"),
+                    blocks=data.get("blocks"),
+                    blocked_by=data.get("blocked_by"),
+                    status=status
+                )
+                _json_response(self, {"id": real_id, "status": status})
+
+            elif path == "/board/dormant":
+                required = {"id", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                actor = data["from_agent"]
+                if actor not in ["claude", "matt"]:
+                    _json_response(self, {"error": "unauthorized", "message": "Only admins can mark tickets as dormant"}, 403)
+                    return
+                rt.board_dormant(
+                    ticket_id=data["id"],
+                    actor=actor
+                )
+                _json_response(self, {"id": data["id"], "status": "dormant"})
+
+            elif path == "/board/revive":
+                required = {"id", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                actor = data["from_agent"]
+                if actor not in ["claude", "matt"]:
+                    _json_response(self, {"error": "unauthorized", "message": "Only admins can revive tickets"}, 403)
+                    return
+                rt.board_revive(
+                    ticket_id=data["id"],
+                    actor=actor
+                )
+                _json_response(self, {"id": data["id"], "status": "open"})
+
+            elif path == "/board/claim":
+                required = {"id", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                rt.board_claim(
+                    ticket_id=data["id"],
+                    actor=data["from_agent"]
+                )
+                _json_response(self, {"id": data["id"], "status": "claimed", "owner": data["from_agent"]})
+
+            elif path == "/board/flag":
+                required = {"id", "from_agent", "work_done"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                rt.board_flag(
+                    ticket_id=data["id"],
+                    actor=data["from_agent"],
+                    work_done=data["work_done"]
+                )
+                _json_response(self, {"id": data["id"], "status": "ready", "work_done": data["work_done"]})
+
+            elif path == "/board/finalize":
+                required = {"id", "from_agent"}
+                missing = required - set(data.keys())
+                if missing:
+                    _json_response(self, {"error": "missing_fields", "fields": list(missing)}, 400)
+                    return
+                actor = data["from_agent"]
+                if actor not in ["claude", "matt"]:
+                    _json_response(self, {"error": "unauthorized", "message": "Only admins can finalize tickets"}, 403)
+                    return
+                changelog_handle = rt.board_finalize(
+                    ticket_id=data["id"],
+                    actor=actor
+                )
+                _json_response(self, {"id": data["id"], "status": "done", "changelog_handle": changelog_handle})
 
             else:
                 _json_response(self, {"error": "not found", "path": path}, 404)

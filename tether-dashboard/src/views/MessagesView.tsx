@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { InboxTab } from '../components/messages/InboxTab';
 import { ComposeTab } from '../components/messages/ComposeTab';
-import { Inbox, PenSquare } from 'lucide-react';
+import { HandleBrowserView } from './HandleBrowserView';
+import { Inbox, PenSquare, Search } from 'lucide-react';
 import { useInboxStore } from '../store/inboxStore';
 import { api } from '../api/client';
 import { cn } from '../utils/cn';
 
 export const MessagesView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'inbox' | 'compose'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'compose' | 'handles'>('inbox');
   const { setMessages, unreadCount } = useInboxStore();
 
   useEffect(() => {
@@ -56,11 +57,30 @@ export const MessagesView: React.FC = () => {
           <PenSquare className="w-4 h-4" />
           <span className="font-medium text-sm">Compose</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab('handles')}
+          className={cn(
+            "pb-4 flex items-center gap-2 border-b-2 transition-colors",
+            activeTab === 'handles' 
+              ? "border-[#00f2ff] text-[#00f2ff]" 
+              : "border-transparent text-[#8892b0] hover:text-[#e0e6ed]"
+          )}
+        >
+          <Search className="w-4 h-4" />
+          <span className="font-medium text-sm">Search Handles</span>
+        </button>
       </div>
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden bg-[#0f111a] m-6 border border-[#ffffff14] rounded-2xl stat-card-gradient relative shadow-xl">
-        {activeTab === 'inbox' ? <InboxTab /> : <ComposeTab />}
+        {activeTab === 'inbox' ? (
+          <InboxTab />
+        ) : activeTab === 'compose' ? (
+          <ComposeTab />
+        ) : (
+          <HandleBrowserView />
+        )}
       </div>
     </div>
   );

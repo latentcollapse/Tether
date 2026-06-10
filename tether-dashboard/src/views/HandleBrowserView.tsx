@@ -55,7 +55,7 @@ export function HandleBrowserView() {
   }, [query]);
 
   return (
-    <div className="max-w-5xl mx-auto p-6 flex flex-col gap-8 w-full h-full">
+    <div className="max-w-5xl mx-auto p-6 flex flex-col gap-8 w-full h-full overflow-y-auto">
       <div>
         <h1 className="text-2xl font-semibold mb-2">Handle Browser</h1>
         <p className="text-[#8892b0] text-sm mb-6">Browse handles from the local Tether database.</p>

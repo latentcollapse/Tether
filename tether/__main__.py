@@ -572,6 +572,217 @@ def _create_dashboard_app(dist_dir: Path):
             )
         return items
 
+    @app.get("/api/board/tickets")
+    def get_board_tickets(
+        category: str = None,
+        tier: str = None,
+        status: str = None,
+        owner: str = None,
+        batch: str = None,
+        sort: str = "newest",
+    ):
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            tickets = runtime.board_query(
+                category=category or None,
+                tier=tier or None,
+                status=status or None,
+                owner=owner or None,
+                batch=batch or None,
+                sort=sort,
+            )
+            return {"tickets": tickets}
+        finally:
+            runtime.close()
+
+    @app.get("/api/board/changelog")
+    def get_board_changelog(query: str = None):
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            changelog = runtime.board_changelog_query(query_str=query or None)
+            return {"changelog": changelog}
+        finally:
+            runtime.close()
+
+    @app.get("/api/board/whiteboard")
+    def get_board_whiteboard():
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            return {"content": runtime.get_whiteboard()}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/whiteboard")
+    def post_board_whiteboard(payload: dict):
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            content = payload.get("content", "")
+            runtime.update_whiteboard(content)
+            return {"success": True}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/propose")
+    def post_board_propose(payload: dict):
+        required = {"category", "tier", "title", "description", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            handle = runtime.board_propose(
+                category=payload["category"],
+                tier=payload["tier"],
+                title=payload["title"],
+                description=payload["description"],
+                actor=payload["from_agent"],
+            )
+            return {"handle": handle, "status": "proposed"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/accept")
+    def post_board_accept(payload: dict):
+        required = {"id", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        actor = payload["from_agent"]
+        if actor not in ["claude", "matt"]:
+            raise HTTPException(status_code=403, detail="Only admins can accept proposed tickets")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            real_id = runtime.board_accept(
+                proposed_id=payload["id"],
+                actor=actor,
+                tier=payload.get("tier"),
+            )
+            return {"id": real_id, "status": "accepted"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/author")
+    def post_board_author(payload: dict):
+        required = {"category", "tier", "title", "description", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        actor = payload["from_agent"]
+        if actor not in ["claude", "matt"]:
+            raise HTTPException(status_code=403, detail="Only admins can author tickets directly")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            status = payload.get("status", "open")
+            real_id = runtime.board_author(
+                category=payload["category"],
+                tier=payload["tier"],
+                title=payload["title"],
+                description=payload["description"],
+                actor=actor,
+                batch=payload.get("batch"),
+                principle=payload.get("principle"),
+                bible_ref=payload.get("bible_ref"),
+                gate=payload.get("gate"),
+                blocks=payload.get("blocks"),
+                blocked_by=payload.get("blocked_by"),
+                status=status
+            )
+            return {"id": real_id, "status": status}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/dormant")
+    def post_board_dormant(payload: dict):
+        required = {"id", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        actor = payload["from_agent"]
+        if actor not in ["claude", "matt"]:
+            raise HTTPException(status_code=403, detail="Only admins can mark tickets as dormant")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.board_dormant(
+                ticket_id=payload["id"],
+                actor=actor
+            )
+            return {"id": payload["id"], "status": "dormant"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/revive")
+    def post_board_revive(payload: dict):
+        required = {"id", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        actor = payload["from_agent"]
+        if actor not in ["claude", "matt"]:
+            raise HTTPException(status_code=403, detail="Only admins can revive tickets")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.board_revive(
+                ticket_id=payload["id"],
+                actor=actor
+            )
+            return {"id": payload["id"], "status": "open"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/claim")
+    def post_board_claim(payload: dict):
+        required = {"id", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.board_claim(
+                ticket_id=payload["id"],
+                actor=payload["from_agent"],
+            )
+            return {"id": payload["id"], "status": "claimed", "owner": payload["from_agent"]}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/flag")
+    def post_board_flag(payload: dict):
+        required = {"id", "from_agent", "work_done"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.board_flag(
+                ticket_id=payload["id"],
+                actor=payload["from_agent"],
+                work_done=payload["work_done"],
+            )
+            return {"id": payload["id"], "status": "ready", "work_done": payload["work_done"]}
+        finally:
+            runtime.close()
+
+    @app.post("/api/board/finalize")
+    def post_board_finalize(payload: dict):
+        required = {"id", "from_agent"}
+        missing = required - set(payload.keys())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing fields: {list(missing)}")
+        actor = payload["from_agent"]
+        if actor not in ["claude", "matt"]:
+            raise HTTPException(status_code=403, detail="Only admins can finalize tickets")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            changelog_handle = runtime.board_finalize(
+                ticket_id=payload["id"],
+                actor=actor,
+            )
+            return {"id": payload["id"], "status": "done", "changelog_handle": changelog_handle}
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            runtime.close()
+
     @app.get("/{path:path}", include_in_schema=False)
     def static_or_index(path: str):
         target = (dist_dir / path).resolve()
