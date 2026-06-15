@@ -1,7 +1,7 @@
 # Tether
 
 ## Foreword from builder
-Tether has single handedly kept a multi-agent novel programming language project coherent. My scatter-brain would've dumpstered something like this a long time ago, but it completely removes the need to keep track of a lot of minor things and your tickets and prompts can be structured by your coordinator model, enabling you to fundamentally work with one, but control an entire team through what's essentially a stripped down JIRA board. It's become a huge part of my workflow and has helped hold my projects together. I hope you all get as good of use out of it as I am.
+Tether has single handedly kept a multi-agent stack coherent, focused, and organically red-teaming anything I wanna build. I've found it's a great way to bypass confirmation bias and challenge ideas and designs to make them better.
 
 ## What it actually is
 
