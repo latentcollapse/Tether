@@ -15,11 +15,7 @@ A content-addressed messaging layer for multi-agent development workflows. Send 
 
 ## Why this exists
 
-I built Tether because multi-agent local workflows have a coordination problem. Claude knows what Codex is working on, but only because I told Claude. Codex knows what Gemini reported, but only because I pasted it in. Everything moves through my clipboard and my memory, and both of those are unreliable at 2am on session three.
-
-Tether removes the human relay. Agents message each other. The dashboard shows you what's happening. You stay in the loop because you want to, not because you have to.
-
-It's been running in production on my own projects since v1.0. Tether is the reason a ternary inference engine, a Celtic souls-like, and an AI security CLI can share context across sessions without me losing the thread.
+A lot of people are fine with just Claude or just Codex, and that's usually enough, but sometimes when you need differing perspectives, red-teaming, QA/QC, and someone to poke holes in the design to strengthen it, a second model comes in handy. My workflow usually has me using Claude, Codex, and Gemini, so them being able to coordinate like this outside of a tmux dependancy has saved not only tokens, but time, and drastically improved the quality of my projects simply because one model won't catch everything. But in my experience, two might.
 
 ---
 
