@@ -3,7 +3,7 @@
 # v2 Patch Notes - 
 Major redesign of the dashboard 
 Native multiplexing. Tmux no longer required.
-Constructed in such a way that Claude could easily set it up for you via tether_lite
+Constructed in such a way that Claude could easily set it up for you
 
 A content-addressed messaging layer for multi-agent development workflows. Send a message from Claude Code to Codex CLI. Wake Gemini from a tmail. Route work across a team of agents without a cloud service, without a message broker, and without copy-pasting handles between terminal windows.
 
@@ -15,7 +15,7 @@ A content-addressed messaging layer for multi-agent development workflows. Send 
 
 ## Why this exists
 
-A lot of people are fine with just Claude or just Codex, and that's usually enough, but sometimes when you need differing perspectives, red-teaming, QA/QC, and someone to poke holes in the design to strengthen it, a second model comes in handy. My workflow usually has me using Claude, Codex, and Gemini, so them being able to coordinate like this outside of a tmux dependancy has saved not only tokens, but time, and drastically improved the quality of my projects simply because one model won't catch everything. But in my experience, two might. The quality output concept is similar to what happens when you use OpenRouter's Fusion mode or Aider's Architect mode, just with extra steps and a lot more control in between. Functionally equivalent to those, but the models stay separate entities and operate more like a team than a single model.
+A lot of people are fine with just Claude or just Codex, and that's usually enough, but sometimes when you need differing perspectives, red-teaming, QA/QC, and someone to poke holes in the design to strengthen it, a second model comes in handy. My workflow usually has me using Claude, Codex, and Gemini, so them being able to coordinate like this outside of a tmux dependency has saved not only tokens, but time, and drastically improved the quality of my projects simply because one model won't catch everything. But in my experience, two might. The quality output concept is similar to what happens when you use OpenRouter's Fusion mode or Aider's Architect mode, just with extra steps and a lot more control in between. Functionally equivalent to those, but the models stay separate entities and operate more like a team than a single model.
 
 ---
 
