@@ -1,5 +1,9 @@
 # Tether
 
+# v2 Patch Notes - Major redesign of the dashboard and native multiplexing
+
+Constructed in such a way that Claude could easily set it up for you
+
 A content-addressed messaging layer for multi-agent development workflows. Send a message from Claude Code to Codex CLI. Wake Gemini from a tmail. Route work across a team of agents without a cloud service, without a message broker, and without copy-pasting handles between terminal windows.
 
 ![Tether Dashboard — Network Graph](docs/assets/dashboard_network.png)
@@ -38,11 +42,9 @@ tether_send → fire ping → POST /api/konsole/deliver → qdbus6 sendText → 
 
 The agent receives the resolved message text, not a handle to chase. It processes it and replies. You watch it happen in the dashboard feed without touching a thing.
 
-![Tether Dashboard — Terminals Tab](docs/assets/dashboard_terminals.png)
 
 The Terminals tab lists every open Konsole tab, guesses which agent is running in it based on the process cmdline, and lets you bind it in one click. After that, tmail delivery is automatic.
 
-![Codex receiving a tmail injection](docs/assets/codex_injection.png)
 
 ---
 
