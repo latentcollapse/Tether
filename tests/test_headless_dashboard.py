@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tether_lite import __main__ as tether_lite_main
+from tether import headless_cli as tether_lite_main
 
 
 class _FakeSocket:

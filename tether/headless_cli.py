@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from tether_lite.pake import (
+from tether.pake import (
     DEFAULT_P2P_PORT,
     PakeListener,
     connect_secure_channel,
@@ -39,8 +39,9 @@ def find_dashboard_dist() -> Path | None:
     repo_root = Path(__file__).resolve().parent.parent
     candidates.extend(
         [
+            repo_root / "src" / "dashboard" / "dist",
             repo_root / "tether-dashboard" / "dist",
-            repo_root.parent / "Tether" / "tether-dashboard" / "dist",
+            repo_root.parent / "Tether" / "src" / "dashboard" / "dist",
         ]
     )
 
@@ -64,7 +65,7 @@ def launch_dashboard() -> int:
 
     dist_dir = _dashboard_dist_dir() or find_dashboard_dist()
     if dist_dir is None:
-        sys.stdout.write("Run `npm run build` in tether-dashboard/ first\n")
+        sys.stdout.write("Run `npm run build` in src/dashboard/ first\n")
         return 1
 
     host = os.environ.get("TETHER_HOST", "127.0.0.1")

@@ -4,7 +4,7 @@ import time
 import pytest
 
 from tether.exceptions import E_PAKE_AUTH_FAILED
-from tether_lite.pake import _client_handshake, _server_handshake
+from tether.pake import _client_handshake, _server_handshake
 
 
 def test_pake_lan_round_trip() -> None:

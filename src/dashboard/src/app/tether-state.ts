@@ -58,17 +58,6 @@ export interface MessageItem {
   tags: string[];
 }
 
-export interface NetworkKey {
-  id: string;
-  agentName: string;
-  status: 'active' | 'revoked';
-  key: string;
-  tier: string;
-  issuedDate: string;
-  lastUsed: string;
-  usagePercent: number;
-}
-
 export interface JobTicket {
   id: string;
   title: string;
@@ -250,7 +239,6 @@ export class TetherState {
   edges = signal<NetworkEdge[]>([]);
   feed = signal<FeedItem[]>([]);
   messages = signal<MessageItem[]>([]);
-  networkKeys = signal<NetworkKey[]>([]);
   tickets = signal<JobTicket[]>([]);
   changelog = signal<ChangelogEntry[]>([]);
   whiteboardText = signal<string>('# Shared Scratchpad & Whiteboard\n\nUse this space for collaborative draft thoughts between active network agents.\n\n- **Project Hook**: Sync tasks from SQLite logs\n- **Node Endpoint**: `http://localhost:18083` for code analysis\n- **PAKE Status**: Completed local LAN discovery handshake');
@@ -344,11 +332,6 @@ export class TetherState {
     });
     effect(() => {
       if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-        localStorage.setItem('tether_keys', JSON.stringify(this.networkKeys()));
-      }
-    });
-    effect(() => {
-      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
         localStorage.setItem('tether_tickets', JSON.stringify(this.tickets()));
       }
     });
@@ -402,9 +385,6 @@ export class TetherState {
             this.activeDiagnosticEdge.set(null);
           }
         },
-        rotateKey: (id: string) => this.rotateKey(id),
-        revokeKey: (id: string) => this.revokeKey(id),
-        issueKey: (agentName: string, tier: 'local' | 'relay' | 'cloud') => this.issueKey(agentName, tier),
         exportDatabaseSnapshot: () => this.exportDatabaseSnapshot(),
         importDatabaseSnapshot: (json: string) => this.importDatabaseSnapshot(json),
         resetAllAgentRegistrations: () => this.resetAllAgentRegistrations(),
@@ -417,7 +397,6 @@ export class TetherState {
     if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
       this.resetNodes();
       this.resetEdges();
-      this.resetKeys();
       this.resetTickets();
       this.resetChangelog();
       this.resetMessages();
@@ -480,17 +459,6 @@ export class TetherState {
       this.resetEdges();
     }
 
-    // Network Keys
-    const savedKeys = localStorage.getItem('tether_keys');
-    if (savedKeys) {
-      try {
-        this.networkKeys.set(JSON.parse(savedKeys));
-      } catch {
-        this.resetKeys();
-      }
-    } else {
-      this.resetKeys();
-    }
 
     // Tickets
     const savedTickets = localStorage.getItem('tether_tickets');
@@ -579,10 +547,6 @@ export class TetherState {
 
   resetEdges() {
     this.edges.set([]);
-  }
-
-  resetKeys() {
-    this.networkKeys.set([]);
   }
 
   resetTickets() {
@@ -790,48 +754,6 @@ export class TetherState {
     }
   }
 
-  // Network Keys Actions
-  rotateKey(id: string) {
-    this.networkKeys.update(keysList => keysList.map(k => {
-      if (k.id === id) {
-        const hex = '0123456789abcdef';
-        let keyPart = '';
-        for (let i = 0; i < 12; i++) keyPart += hex[Math.floor(Math.random() * 16)];
-        return {
-          ...k,
-          key: `tet_${keyPart.substring(0, 6)}...${keyPart.substring(6)}`,
-          lastUsed: new Date().toISOString().slice(0, 16).replace('T', ' '),
-          usagePercent: 0,
-        };
-      }
-      return k;
-    }));
-  }
-
-  revokeKey(id: string) {
-    this.networkKeys.update(keysList => keysList.map(k => k.id === id ? { ...k, status: 'revoked' } : k));
-  }
-
-  issueKey(agentName: string, tier: 'local' | 'relay' | 'cloud') {
-    const id = `k_${Date.now()}`;
-    const hex = '0123456789abcdef';
-    let keyPart = '';
-    for (let i = 0; i < 12; i++) keyPart += hex[Math.floor(Math.random() * 16)];
-    
-    const newKey: NetworkKey = {
-      id,
-      agentName,
-      status: 'active',
-      key: `tet_${keyPart.substring(0, 6)}...${keyPart.substring(6)}`,
-      tier,
-      issuedDate: new Date().toISOString().slice(0, 10),
-      lastUsed: 'Never',
-      usagePercent: 0,
-    };
-
-    this.networkKeys.update(keysList => [newKey, ...keysList]);
-  }
-
   // Job Board & Changelog
   createTicket(title: string, category: 'core' | 'p2p' | 'crypto' | 'ui' | 'agent', difficulty: 'low' | 'medium' | 'high', tier: 'local' | 'relay' | 'cloud', description: string) {
     const handle = Math.random().toString(16).substr(2, 6) + '...' + Math.random().toString(16).substr(2, 3);
@@ -871,7 +793,6 @@ export class TetherState {
       customTheme: this.customThemeTokens(),
       nodes: this.nodes(),
       edges: this.edges(),
-      keys: this.networkKeys(),
       tickets: this.tickets(),
       changelog: this.changelog(),
       messages: this.messages(),
@@ -888,7 +809,6 @@ export class TetherState {
       if (snap.customTheme) this.customThemeTokens.set(snap.customTheme);
       if (snap.nodes) this.nodes.set(snap.nodes);
       if (snap.edges) this.edges.set(snap.edges);
-      if (snap.keys) this.networkKeys.set(snap.keys);
       if (snap.tickets) this.tickets.set(snap.tickets);
       if (snap.changelog) this.changelog.set(snap.changelog);
       if (snap.messages) this.messages.set(snap.messages);
@@ -1330,6 +1250,5 @@ export class TetherState {
   resetAllAgentRegistrations() {
     this.resetNodes();
     this.resetEdges();
-    this.resetKeys();
   }
 }

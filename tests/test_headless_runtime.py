@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tether_lite.runtime import CLOSED, MessageNotFound, TetherLiteRuntime
+from tether.runtime import CLOSED, MessageNotFound, TetherLiteRuntime
 
 
 def test_send_inbox_receive_close_round_trip(tmp_path: Path) -> None:

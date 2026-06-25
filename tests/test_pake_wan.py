@@ -12,7 +12,7 @@ from relay.main import app
 from relay.routers import rendezvous
 from relay.tier import reset_daily_message_counts
 from tether.exceptions import E_PAKE_PROTOCOL
-from tether_lite import pake
+from tether import pake
 
 
 @pytest.fixture()

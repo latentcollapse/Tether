@@ -94,7 +94,7 @@ cd tether
 pip install .
 ```
 
-The built dashboard is committed in `tether-dashboard/dist`. You don't need Node.js unless you're modifying the frontend.
+The built dashboard is committed in `src/dashboard/dist`. You don't need Node.js unless you're modifying the frontend.
 
 ## MCP Setup
 
@@ -248,4 +248,4 @@ Full notes in [changelog/](changelog/).
 
 - TetherLite: AGPL v3
 - Relay source: AGPL v3
-- Hosted service terms: separate from source distribution
+- Hosted relay service terms: separate from source distribution

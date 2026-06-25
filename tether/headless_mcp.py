@@ -14,12 +14,10 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from tether.crypto import collapse_encrypted, generate_keypair, resolve_encrypted
 from tether.handles import BLOB_PREFIX, TREE_PREFIX, suffix
 from tether.mcp_stdio_compat import compat_stdio_server
-from tether_lite.runtime import MessageNotFound, TetherLiteRuntime
+from tether.headless import MessageNotFound, TetherLiteRuntime
 
 logger = logging.getLogger(__name__)
 runtime = TetherLiteRuntime()

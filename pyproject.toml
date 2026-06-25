@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tether"
-version = "2.0.0"
+version = "2.1.0"
 description = "Deterministic data transfer format for LLM-to-LLM communication"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -23,6 +23,7 @@ dependencies = [
 [project.scripts]
 tether = "tether.__main__:main"
 tether-mcp = "tether.mcp_server:main"
+tether-headless = "tether.headless_cli:main"
 
 [tool.setuptools.packages.find]
-include = ["tether*", "tether_lite*", "relay*"]
+include = ["tether*", "relay*"]

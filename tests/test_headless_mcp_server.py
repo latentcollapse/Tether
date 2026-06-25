@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tether_lite import mcp_server
-from tether_lite.runtime import TetherLiteRuntime
+from tether import headless_mcp as mcp_server
+from tether.runtime import TetherLiteRuntime
 
 
 @pytest.fixture(autouse=True)

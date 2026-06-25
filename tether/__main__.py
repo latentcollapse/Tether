@@ -209,12 +209,15 @@ def _dashboard_dist_dir() -> Path | None:
     repo_root = Path(__file__).resolve().parents[1]
     candidates.extend(
         [
+            repo_root / "src" / "dashboard" / "dist" / "app" / "browser",
+            repo_root / "src" / "dashboard" / "dist" / "app",
+            repo_root / "src" / "dashboard" / "dist",
             repo_root / "tether-dashboard" / "dist" / "app" / "browser",
             repo_root / "tether-dashboard" / "dist" / "app",
             repo_root / "tether-dashboard" / "dist",
-            Path.cwd() / "tether-dashboard" / "dist" / "app" / "browser",
-            Path.cwd() / "tether-dashboard" / "dist" / "app",
-            Path.cwd() / "tether-dashboard" / "dist",
+            Path.cwd() / "src" / "dashboard" / "dist" / "app" / "browser",
+            Path.cwd() / "src" / "dashboard" / "dist" / "app",
+            Path.cwd() / "src" / "dashboard" / "dist",
         ]
     )
 

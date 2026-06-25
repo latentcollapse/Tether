@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tether_lite.runtime import TetherLiteRuntime
+from tether.runtime import TetherLiteRuntime
 
 
 def test_inline_handle_round_trip(tmp_path: Path) -> None:
