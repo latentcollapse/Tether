@@ -99,9 +99,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in {"-h", "--help"}:
         sys.stdout.write(
-            "Usage: python -m tether_lite dashboard\n"
-            "   or: python -m tether_lite connect --passphrase ...\n"
-            "   or: python -m tether_lite listen --passphrase ...\n"
+            "Usage: tether-headless dashboard\n"
+            "   or: tether-headless connect --passphrase ...\n"
+            "   or: tether-headless listen --passphrase ...\n"
         )
         return 0
     if args[0] == "dashboard":

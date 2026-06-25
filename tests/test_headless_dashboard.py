@@ -41,4 +41,4 @@ def test_launch_dashboard_reports_missing_dist(
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert captured.out == "Run `npm run build` in tether-dashboard/ first\n"
+    assert captured.out == "Run `npm run build` in src/dashboard/ first\n"

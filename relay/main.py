@@ -18,7 +18,13 @@ from .routers import admin, agents, billing, handles, keys, rendezvous, ws
 
 logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DASHBOARD_DIST = REPO_ROOT / "tether-dashboard" / "dist"
+DASHBOARD_DIST = next(
+    (p for p in [
+        REPO_ROOT / "src" / "dashboard" / "dist",
+        REPO_ROOT / "tether-dashboard" / "dist",
+    ] if p.is_dir()),
+    REPO_ROOT / "src" / "dashboard" / "dist",
+)
 
 
 @asynccontextmanager

@@ -407,7 +407,7 @@ import {CommonModule} from '@angular/common';
               </div>
 
               <div>
-                <label class="block text-[11px] text-[var(--text-secondary)] mb-1">Billing Tier Target</label>
+                <label class="block text-[11px] text-[var(--text-secondary)] mb-1">Work Category Tier</label>
                 <select 
                   formControlName="tier"
                   class="w-full px-3 py-1.5 text-xs rounded border border-[var(--border)] bg-[var(--bg-base)] text-[var(--text-primary)] focus:outline-none"

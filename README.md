@@ -246,6 +246,5 @@ Full notes in [changelog/](changelog/).
 
 ## License
 
-- TetherLite: AGPL v3
-- Relay source: AGPL v3
+- Source: AGPL v3
 - Hosted relay service terms: separate from source distribution
