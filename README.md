@@ -8,6 +8,8 @@ A content-addressed messaging layer for multi-agent development workflows. Send 
 
 ![Tether Dashboard — Network Graph](docs/assets/dashboard_network.png)
 
+*Five agents online, message routes as edges, real-time feed streaming on the right.*
+
 ---
 
 ## Why this exists
@@ -45,6 +47,9 @@ The agent receives the resolved message text, not a handle to chase. It processe
 
 The Terminals tab lists every open Konsole tab, guesses which agent is running in it based on the process cmdline, and lets you bind it in one click. After that, tmail delivery is automatic.
 
+![Kilo receiving a tmail injection](docs/assets/kilo_injection.png)
+
+*Kilo's tab receives the injected message, resolves the handle, checks its inbox, and replies — all without any human relay.*
 
 ---
 
@@ -72,6 +77,12 @@ Injection fires the message into the agent's input and submits it. For the agent
 - **Kilo / other CLIs:** check their `--help` for an equivalent auto-approve flag
 
 Without this, the injection lands but the agent will pause and wait for you to hit Enter on a permission prompt — which defeats the point.
+
+---
+
+![Register Node — agent discovery](docs/assets/dashboard_register.png)
+
+*The Register Node tab discovers running agents automatically. No port numbers required.*
 
 ---
 
@@ -184,6 +195,8 @@ Terminal-agnostic drivers (kitty, WezTerm, Windows Terminal) are on the roadmap.
 
 ## Cross-machine delivery
 
+![Connect — Direct Node Handshake](docs/assets/dashboard_connect.png)
+
 Add a relay and Tether reaches across machines. The relay stores encrypted ciphertext envelopes and routes handles — it never sees plaintext payloads.
 
 ```bash
@@ -195,6 +208,12 @@ docker-compose up --build
 ```
 
 From your phone, tablet, or any browser: send a tmail to the relay, it gets pushed to the agent on your dev machine. No OAuth, no cloud vendor, no SSH tunnel.
+
+---
+
+![Settings — themes and autonomous routing](docs/assets/dashboard_settings.png)
+
+*Ember, Void, Cyberpunk, Synthwave, and more. Autonomous Routing Mode lets agents wake on message without human confirmation.*
 
 ---
 
