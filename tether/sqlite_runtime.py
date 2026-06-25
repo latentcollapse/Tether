@@ -113,10 +113,69 @@ class SQLiteRuntime:
             )
         """)
 
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_handles_table ON tether_handles(table_name)")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_channel_members (
+                channel_id TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                PRIMARY KEY (channel_id, agent),
+                FOREIGN KEY (channel_id) REFERENCES tether_channels(id)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_channel_messages (
+                id TEXT PRIMARY KEY,
+                channel_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                body TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                thread_id TEXT NULL,
+                FOREIGN KEY (channel_id) REFERENCES tether_channels(id)
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chan_msgs_id ON tether_channel_messages(channel_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chan_members_agent ON tether_channel_members(agent)")
+
+        # Multiplexer presence + routes (v2.0)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_presence (
+                agent       TEXT PRIMARY KEY,
+                status      TEXT NOT NULL DEFAULT 'offline',
+                pid         INTEGER,
+                ping_port   INTEGER,
+                last_heartbeat TEXT,
+                registered_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_routes (
+                id          TEXT PRIMARY KEY,
+                from_agent  TEXT NOT NULL,
+                to_agent    TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'active',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_routes_agents ON tether_routes(from_agent, to_agent)")
+
+        # Konsole D-Bus bindings (v2.0) — agent id → live Konsole tab
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_konsole_bindings (
+                agent       TEXT PRIMARY KEY,
+                service     TEXT NOT NULL,
+                session     TEXT NOT NULL,
+                bound_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
         self._conn.commit()
-        self._init_tasks_db()
-        self._init_smart_board_db()
+
 
     def _init_tasks_db(self):
         """Initialize shared task board tables (v1.5)."""
@@ -567,6 +626,112 @@ Welcome to your team scratchpad! Use this space to collaborate, draft code, or c
             (agent,)
         ).fetchone()
         return {"agent": agent, "url": row[0], "enabled": bool(row[1])} if row else None
+
+    # ── Multiplexer Presence + Routes (v2.0) ─────────────────────────────────
+
+    def presence_register(self, agent: str, pid: int | None = None, ping_port: int | None = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO tether_presence (agent, status, pid, ping_port, last_heartbeat, registered_at) "
+            "VALUES (?, 'online', ?, ?, ?, ?) "
+            "ON CONFLICT(agent) DO UPDATE SET status='online', pid=excluded.pid, "
+            "ping_port=excluded.ping_port, last_heartbeat=excluded.last_heartbeat",
+            (agent, pid, ping_port, now, now),
+        )
+        self._conn.commit()
+
+    def presence_heartbeat(self, agent: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE tether_presence SET last_heartbeat=?, status='online' WHERE agent=?",
+            (now, agent),
+        )
+        self._conn.commit()
+
+    def presence_offline(self, agent: str) -> None:
+        self._conn.execute(
+            "UPDATE tether_presence SET status='offline', pid=NULL WHERE agent=?",
+            (agent,),
+        )
+        self._conn.commit()
+
+    def presence_list(self, stale_seconds: int = 15) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT agent, status, pid, ping_port, last_heartbeat, registered_at FROM tether_presence"
+        ).fetchall()
+        now = datetime.now(timezone.utc)
+        result = []
+        for row in rows:
+            hb = row["last_heartbeat"]
+            live = False
+            if hb and row["status"] == "online":
+                try:
+                    from datetime import datetime as _dt
+                    hb_dt = _dt.fromisoformat(hb.replace("Z", "+00:00"))
+                    if hb_dt.tzinfo is None:
+                        from datetime import timezone as _tz
+                        hb_dt = hb_dt.replace(tzinfo=_tz.utc)
+                    live = (now - hb_dt).total_seconds() < stale_seconds
+                except Exception:
+                    pass
+            result.append({
+                "agent": row["agent"],
+                "status": "online" if live else "offline",
+                "pid": row["pid"],
+                "ping_port": row["ping_port"],
+                "last_heartbeat": hb,
+                "registered_at": row["registered_at"],
+            })
+        return result
+
+    def route_create(self, from_agent: str, to_agent: str) -> str:
+        import hashlib
+        route_id = "route_" + hashlib.sha1(f"{from_agent}:{to_agent}".encode()).hexdigest()[:12]
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO tether_routes (id, from_agent, to_agent, status, created_at) VALUES (?, ?, ?, 'active', ?) "
+            "ON CONFLICT(id) DO UPDATE SET status='active'",
+            (route_id, from_agent, to_agent, now),
+        )
+        self._conn.commit()
+        return route_id
+
+    def route_delete(self, route_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM tether_routes WHERE id=?", (route_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def route_list(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT id, from_agent, to_agent, status, created_at FROM tether_routes ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def konsole_bind(self, agent: str, service: str, session: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO tether_konsole_bindings (agent, service, session, bound_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(agent) DO UPDATE SET service=excluded.service, session=excluded.session, bound_at=excluded.bound_at",
+            (agent, service, session, now),
+        )
+        self._conn.commit()
+
+    def konsole_unbind(self, agent: str) -> None:
+        self._conn.execute("DELETE FROM tether_konsole_bindings WHERE agent=?", (agent,))
+        self._conn.commit()
+
+    def konsole_binding(self, agent: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT agent, service, session, bound_at FROM tether_konsole_bindings WHERE agent=?",
+            (agent,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def konsole_bindings(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT agent, service, session, bound_at FROM tether_konsole_bindings"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Smart Board (v2.0) ────────────────────────────────────────────────────
 
@@ -1103,6 +1268,114 @@ Welcome to your team scratchpad! Use this space to collaborate, draft code, or c
             ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
         """, (content,))
         self._conn.commit()
+
+    # ── Channel Management (v2.0) ─────────────────────────────────────────────
+
+    def channel_create(self, name: str, description: str, members: List[str] = None) -> str:
+        """Create a new channel with initial members."""
+        channel_id = f"chan_{name}_{int(datetime.now(timezone.utc).timestamp())}"
+        self._conn.execute(
+            "INSERT INTO tether_channels (id, name, description) VALUES (?, ?, ?)",
+            (channel_id, name, description)
+        )
+        
+        # Add initial members (defaults to matt_dev if none specified)
+        initial_members = members or ['matt_dev']
+        for agent in initial_members:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO tether_channel_members (channel_id, agent) VALUES (?, ?)",
+                (channel_id, agent)
+            )
+        
+        self._conn.commit()
+        return channel_id
+
+    def channel_join(self, channel_id: str, agent: str) -> bool:
+        """Add an agent to a channel."""
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO tether_channel_members (channel_id, agent) VALUES (?, ?)",
+            (channel_id, agent)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def channel_leave(self, channel_id: str, agent: str) -> bool:
+        """Remove an agent from a channel."""
+        cursor = self._conn.execute(
+            "DELETE FROM tether_channel_members WHERE channel_id = ? AND agent = ?",
+            (channel_id, agent)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def channel_send_message(self, channel_id: str, sender: str, body: str, thread_id: Optional[str] = None) -> str:
+        """Send a message to a channel."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        # Generate handle ID for the message
+        msg_data = f"{sender}:{body}:{timestamp}:{channel_id}:{thread_id or ''}"
+        import hashlib
+        handle_id = hashlib.blake2b(msg_data.encode(), digest_size=6).hexdigest()
+        handle = f"h&l_chan_{handle_id}"
+
+        # Store the message
+        self._conn.execute(
+            "INSERT INTO tether_channel_messages (id, channel_id, sender, body, timestamp, thread_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (handle, channel_id, sender, body, timestamp, thread_id)
+        )
+        self._conn.commit()
+        
+        return handle
+
+    def channel_get_messages(self, channel_id: str, limit: int = 100, offset: int = 0) -> List[dict]:
+        """Get messages for a channel with pagination."""
+        cursor = self._conn.execute(
+            """
+            SELECT id, sender, body, timestamp, thread_id
+            FROM tether_channel_messages
+            WHERE channel_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            (channel_id, limit, offset)
+        )
+        
+        messages = []
+        for row in cursor.fetchall():
+            messages.append({
+                "id": row["id"],
+                "sender": row["sender"],
+                "body": row["body"],
+                "timestamp": row["timestamp"],
+                "thread_id": row["thread_id"]
+            })
+        return messages
+
+    def channel_list(self) -> List[dict]:
+        """Get all channels with their member counts."""
+        cursor = self._conn.execute(
+            """
+            SELECT c.id, c.name, c.description, c.created_at,
+                   COUNT(m.agent) as member_count
+            FROM tether_channels c
+            LEFT JOIN tether_channel_members m ON c.id = m.channel_id
+            GROUP BY c.id
+            ORDER BY c.created_at DESC
+            """
+        )
+        
+        channels = []
+        for row in cursor.fetchall():
+            channels.append({
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "created_at": row["created_at"],
+                "member_count": row["member_count"]
+            })
+        return channels
+
+    # ── End Channel Management ────────────────────────────────────────────────
     
     def close(self):
         self._conn.close()

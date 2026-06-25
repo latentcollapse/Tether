@@ -1,6 +1,6 @@
 {
   "name": "Tether Dashboard",
-  "description": "Real-time web GUI for monitoring and controlling a Tether agent network.",
+  "description": "Dense, dark, and highly functional diagnostic interface for the Tether agent message routing network.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

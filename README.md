@@ -1,49 +1,79 @@
 # Tether
 
-## Foreword from builder
-Tether has single handedly kept a multi-agent stack coherent, focused, and organically red-teaming anything I wanna build. I've found it's a great way to bypass confirmation bias and challenge ideas and designs to make them better.
+A content-addressed messaging layer for multi-agent development workflows. Send a message from Claude Code to Codex CLI. Wake Gemini from a tmail. Route work across a team of agents without a cloud service, without a message broker, and without copy-pasting handles between terminal windows.
 
-## What it actually is
+![Tether Dashboard — Network Graph](docs/assets/dashboard_network.png)
 
-Tether is a CLI-to-CLI messaging layer. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build system, a monitoring script, or a human at a terminal. If it has an MCP server, it can have a Tether inbox.
+---
 
-This makes it fundamentally different from agent-to-agent orchestration frameworks, which are designed for service discovery and RPC between running API servers. Tether is async, persistent, and CLI-native. The canonical use case is coordinating Claude Code, Codex CLI, Gemini/Antigravity CLI, Hermes Agent, and similar tools across a local machine or across machines — but the protocol has no AI dependency.
+## Why this exists
 
-It is recommended to maintain a standard operating procedure and job board for your project. These are not required, but they make multi-session workflows significantly more reliable.
+I built Tether because multi-agent local workflows have a coordination problem. Claude knows what Codex is working on, but only because I told Claude. Codex knows what Gemini reported, but only because I pasted it in. Everything moves through my clipboard and my memory, and both of those are unreliable at 2am on session three.
 
-The autoping feature for autonomous agent wake-up requires tmux. It carries the same cautions as running any AI in full-auto mode.
+Tether removes the human relay. Agents message each other. The dashboard shows you what's happening. You stay in the loop because you want to, not because you have to.
 
-Tether has two operating modes:
+It's been running in production on my own projects since v1.0. Tether is the reason a ternary inference engine, a Celtic souls-like, and an AI security CLI can share context across sessions without me losing the thread.
 
-- `TetherLite`: local-first, free forever, no relay required
-- `Tether Cloud`: relay-backed delivery across machines
+---
 
-The same handle format, the same MCP tool names, and the same basic workflow apply in both.
+## What it is
 
-## The Mobile Angle *(Planned feature, not yet implemented)*
+Tether is a CLI-to-CLI messaging layer backed by a local SQLite database. Any process that can call an MCP tool or run a shell command can send and receive messages. It does not care whether the process is an AI model, a build script, or a human at a terminal.
 
-Once you add a relay (self-hosted or Tether Cloud), Tether becomes a remote control for your local machine. Send a message from your phone, your tablet, or any browser. As long as the machine is on and the agent is running, it lands in the inbox and gets processed. No cloud middleman, no OAuth flow, no vendor dependency. It works like async email for your dev environment.
+Messages are stored as **content-addressed handles** — a BLAKE3 hash of the payload. Send the handle, not the payload. The receiver resolves it locally. No serialization mismatches, no "what did you actually send me."
 
-## What Tether Is Not
+For cross-machine workflows, the relay stores encrypted ciphertext envelopes. The relay never sees plaintext.
 
-- Not an agent-to-agent orchestration framework. Tether does not handle service discovery, capability negotiation, or RPC between running servers.
-- Not a compression tool. Handles are deterministic content-addressed pointers, not compressed payloads.
-- Not a generic storage service. TetherLite keeps data local; the relay stores encrypted envelopes and routing metadata, not plaintext.
-- Not tied to one model vendor. Tether is MCP-native and model-agnostic.
+---
 
-## How It Works
+## The v2 multiplexer — no tmux required
 
-Collapse data into a handle, send the handle, resolve it on the other side.
+The biggest change in v2 is the native terminal multiplexer. On KDE/Konsole, Tether talks to each open tab over D-Bus and injects messages directly. No tmux sessions. No port numbers. No running a wrapper process per agent.
 
-```text
-payload -> collapse -> handle -> send handle -> receive handle -> resolve
+The delivery chain looks like this:
+
+```
+tether_send → fire ping → POST /api/konsole/deliver → qdbus6 sendText → agent wakes
 ```
 
-For local use, resolution happens against the local runtime.
+The agent receives the resolved message text, not a handle to chase. It processes it and replies. You watch it happen in the dashboard feed without touching a thing.
 
-For cross-machine encrypted handoff, the sender encrypts the payload for the recipient, uploads ciphertext to the relay, routes the handle, and the recipient fetches ciphertext and decrypts locally. The relay sees ciphertext and routing metadata, not plaintext.
+![Tether Dashboard — Terminals Tab](docs/assets/dashboard_terminals.png)
 
-### Install
+The Terminals tab lists every open Konsole tab, guesses which agent is running in it based on the process cmdline, and lets you bind it in one click. After that, tmail delivery is automatic.
+
+![Codex receiving a tmail injection](docs/assets/codex_injection.png)
+
+---
+
+## Setup for seamless autoping
+
+Two things need to be enabled for fully autonomous agent wake-up. Neither is on by default.
+
+**1. Enable the Konsole D-Bus security API**
+
+Konsole blocks D-Bus input injection by default. Go to:
+
+```
+Konsole → Settings → Configure Konsole → General
+→ check "Enable the security sensitive parts of the DBus API"
+```
+
+This persists across reboots. It's a one-time change.
+
+**2. Run your agents in full-auto (yolo) mode**
+
+Injection fires the message into the agent's input and submits it. For the agent to process it without stopping to ask for confirmation, it needs to be running without approval prompts:
+
+- **Codex CLI:** `codex --full-auto` or `codex --approval-mode full-auto`
+- **Claude Code:** `claude --dangerously-skip-permissions` (or set in your project's permission config)
+- **Kilo / other CLIs:** check their `--help` for an equivalent auto-approve flag
+
+Without this, the injection lands but the agent will pause and wait for you to hit Enter on a permission prompt — which defeats the point.
+
+---
+
+## Install
 
 ```bash
 git clone https://github.com/latentcollapse/tether.git
@@ -51,20 +81,9 @@ cd tether
 pip install .
 ```
 
-The built dashboard is committed in `tether-dashboard/dist`, so a basic install does not require Node.js or `npm run build`.
+The built dashboard is committed in `tether-dashboard/dist`. You don't need Node.js unless you're modifying the frontend.
 
-### CLI Commands
-
-```bash
-tether          # launches dashboard at http://localhost:3000
-tether-mcp      # MCP server entry point used by MCP clients
-```
-
-If port `3000` is busy, `tether` falls back to the next free localhost port.
-
-### MCP Setup
-
-Add Tether to any MCP-compatible client:
+## MCP Setup
 
 ```json
 {
@@ -73,160 +92,136 @@ Add Tether to any MCP-compatible client:
       "command": "tether-mcp",
       "args": [],
       "env": {
-        "TETHER_DB": "~/.local/share/tether/postoffice.db"
+        "TETHER_DB": "/path/to/shared/postoffice.db"
       }
     }
   }
 }
 ```
 
-Default `TETHER_DB` locations:
+Every agent on the same machine should point to the same `TETHER_DB`. That's how they share a message bus.
+
+Default locations if you omit `TETHER_DB`:
 
 - Linux/Mac: `~/.local/share/tether/postoffice.db`
-- Windows: `%APPDATA%\\tether\\postoffice.db`
+- Windows: `%APPDATA%\tether\postoffice.db`
 
-All agents sharing the same machine should point to the same database file.
-
-### First Message
-
-These are MCP tool calls invoked from inside an AI client such as Claude Code, Codex CLI, or any MCP-compatible process. They are not shell commands.
-
-```text
-tether_send to="codex" subject="status" text="What changed?"
-tether_inbox for_agent="codex"
-tether_receive handle="h&l_messages_..."
-```
-
-### Dashboard
+## Starting the dashboard
 
 ```bash
 tether
 ```
 
-That serves the built dashboard locally and opens it in a browser.
+Opens at `http://localhost:3000`. If port 3000 is busy it picks the next free port.
 
-## Tether Cloud
+## Sending a message
 
-Tether Cloud is the planned relay-backed mode for cross-machine coordination.
+From an MCP client (Claude Code, Codex CLI, etc.):
 
-- hosted or self-hosted relay
-- WebSocket push delivery
-- agent discovery
-- dashboard
-- encrypted cross-machine handoff using relay-stored ciphertext envelopes
+```text
+tether_send to="codex" subject="task" text="Refactor the verifier, see C-042 for context"
+tether_inbox for_agent="codex"
+tether_receive handle="h&l_messages_..."
+```
 
-Upgrade does not change the protocol. It changes the transport.
+From the shell:
 
-## MCP Tools
+```bash
+tether send --from-agent claude codex "task" "Refactor the verifier, see C-042 for context"
+```
+
+---
+
+## How handles work
+
+```
+payload → collapse → handle → send handle → receive → resolve
+```
+
+Handles are typed and content-addressed:
+
+- `h&l_messages_{hash}` — messages
+- `h&l_inline_{hash}` — small inline payloads
+- `h&l_blob_{hash}` — binary blobs
+- `h&l_tree_{hash}` — lists of child handles
+
+Identical content always produces the same handle. You can send the same artifact to ten agents and it gets stored once.
+
+---
+
+## MCP tools
 
 | Tool | Purpose |
 |------|---------|
-| `tether_send` | Send a message handle to another agent |
-| `tether_inbox` | List open messages for an agent |
+| `tether_send` | Send a message to another agent |
+| `tether_inbox` | List unread messages for an agent |
 | `tether_receive` | Read a message by handle |
-| `tether_close` | Close a message or ticket thread |
-| `tether_collapse` | Collapse JSON into a deterministic handle |
-| `tether_resolve` | Resolve a handle back to JSON |
-| `tether_collapse_blob` | Store bytes as a blob handle |
+| `tether_close` | Close a message thread |
+| `tether_collapse` | Collapse a payload into a handle |
+| `tether_resolve` | Resolve a handle back to its payload |
+| `tether_collapse_blob` | Store binary data as a blob handle |
 | `tether_resolve_blob` | Resolve a blob handle |
-| `tether_collapse_tree` | Store a list of child handles |
+| `tether_collapse_tree` | Store a list of handles as a tree |
 | `tether_resolve_tree` | Resolve a tree handle |
 
-## Handle Format
+---
 
-Typed handles are content-addressed:
+## Non-KDE terminals
 
-- `h&l_inline_{hash12}`
-- `h&l_blob_{hash12}`
-- `h&l_tree_{hash12}`
-
-The suffix is derived from canonical content. Identical content produces the same handle.
-
-## PAKE P2P
-
-Tether supports passphrase-authenticated peer-to-peer transport:
+If you're not on KDE/Konsole, `tether mux` wraps any CLI in a PTY that Tether owns:
 
 ```bash
-python -m tether_lite listen --passphrase "shared secret"
-python -m tether_lite connect --passphrase "shared secret"
+tether mux --agent codex -- codex --full-auto resume
 ```
 
-WAN rendezvous is available through the relay-assisted PAKE flow:
+Tether owns the PTY, monitors for an idle prompt, and injects when the agent is ready. Same delivery guarantee, different ownership model.
+
+Terminal-agnostic drivers (kitty, WezTerm, Windows Terminal) are on the roadmap. A Docker image and Nix flake for deployment are planned.
+
+---
+
+## Cross-machine delivery
+
+Add a relay and Tether reaches across machines. The relay stores encrypted ciphertext envelopes and routes handles — it never sees plaintext payloads.
 
 ```bash
-python -m tether_lite listen --passphrase "shared secret" --wan --relay-url http://relay:8000 --token TOKEN --local-addr HOST:PORT
-python -m tether_lite connect --passphrase "shared secret" --wan --relay-url http://relay:8000 --key API_KEY --local-addr HOST:PORT
-```
+# self-hosted relay
+python -m uvicorn relay.main:app --host 0.0.0.0 --port 8000
 
-## Cross-Machine Demo
-
-The repo includes a real encrypted relay demo:
-
-```bash
-python demos/cross_machine_demo.py --relay-url http://127.0.0.1:8124 --role senior --name senior-demo
-python demos/cross_machine_demo.py --relay-url http://127.0.0.1:8124 --role junior --name junior-demo --target-name senior-demo
-```
-
-This demo exercises:
-
-- agent registration
-- pubkey discovery
-- encrypted envelope upload
-- WebSocket handle delivery
-- ciphertext fetch
-- local decryption
-- encrypted reply
-
-## Self-Hosting The Relay
-
-The relay is a FastAPI service.
-
-### Local Run
-
-```bash
-python -m uvicorn relay.main:app --host 127.0.0.1 --port 8000
-```
-
-### Docker Compose
-
-```bash
+# or Docker
 docker-compose up --build
 ```
 
-Environment is documented in [.env.example](.env.example).
+From your phone, tablet, or any browser: send a tmail to the relay, it gets pushed to the agent on your dev machine. No OAuth, no cloud vendor, no SSH tunnel.
 
-If `tether-dashboard/dist` exists, the relay serves the dashboard at `/dashboard`.
+---
 
-### Health
+## Security model
 
-- relay: `GET /health`
-- ping daemons: `GET /health` on their local ports
+- Local data never leaves the machine unless you configure a relay.
+- Relay sees ciphertext envelopes and routing metadata. Not plaintext.
+- Encryption and decryption happen on the client side only.
+- AGPL source — the transport and storage claims are auditable.
 
-## Security Model
+The D-Bus injection path requires explicit opt-in (the Konsole security setting above). Tether does not enable it silently.
 
-Tether is designed around bounded trust:
-
-- TetherLite data stays local unless you deliberately route it elsewhere.
-- Relay routing metadata is visible to the relay.
-- Cross-machine encrypted envelopes are encrypted before upload.
-- The relay can store ciphertext for delivery, but it does not decrypt it.
-- Public-key fetch and decryption happen on the client side.
-- AGPL source keeps the transport and storage claims auditable.
-
-This is not "the relay sees nothing at all." It is "the relay never sees plaintext application payloads."
+---
 
 ## Changelog
 
-Version notes live in [changelog/](changelog/).
+Full notes in [changelog/](changelog/).
 
 | Version | Highlights |
 |---------|------------|
-| `v1.8` | TetherLite storage/runtime work, relay core, tier enforcement, encrypted envelopes |
-| `v1.7` | Ping daemon, autoping, and local delivery tooling |
+| `v2.1` | Native D-Bus multiplexer, Terminals tab, no-tmux delivery, agent registry, presence heartbeat, routes API, real-time feed WebSocket |
+| `v1.8` | TetherLite storage/runtime, relay core, tier enforcement, encrypted envelopes |
+| `v1.7` | Ping daemon, autoping, local delivery tooling |
 | `v1.6` | Ping registration and push notifications |
 | `v1.5` | Shared task board |
 | `v1.4` | Tags, read state, ergonomic CLI improvements |
-| `v1.0-v1.3` | Base handle/runtime model |
+| `v1.0–v1.3` | Base handle/runtime model |
+
+---
 
 ## License
 

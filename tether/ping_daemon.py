@@ -74,6 +74,7 @@ AGENT_PATTERNS = {
     ],
     "gemini": [
         re.compile(r'gemini', re.IGNORECASE),
+        re.compile(r'agy', re.IGNORECASE),
         re.compile(r'\u2726'),
         re.compile(r'\u25c7'),
     ],
@@ -87,10 +88,15 @@ AGENT_PATTERNS = {
         re.compile(r'deepseek', re.IGNORECASE),
         re.compile(r'hermes', re.IGNORECASE),
     ],
+    "pi": [
+        re.compile(r'\bpi\b', re.IGNORECASE),
+        re.compile(r'\u03c0', re.IGNORECASE),  # \u03c0 character in pane title
+    ],
 }
 
 IDLE_POLL_INTERVAL = 0.5  # seconds
-IDLE_MAX_WAIT = 5         # seconds — inject anyway after this
+IDLE_MAX_WAIT = 5         # seconds — first-pass idle check window
+IDLE_RETRY_DEADLINE = 600 # seconds — keep retrying until pane goes idle (never force-inject)
 logger = logging.getLogger(__name__)
 
 
@@ -261,52 +267,133 @@ def pane_matches_agent(pane: str, agent: str) -> bool:
         return False
 
 
-def resolve_pane(agent: str) -> str:
+def _pane_id_num(pane_id: str) -> int:
+    """Extract numeric part of tmux pane ID (e.g. '%12' → 12).
+
+    tmux assigns pane IDs monotonically, so the highest number is the most
+    recently created session — the right tiebreaker when multiple panes run
+    the same command (e.g. several abandoned claude sessions alongside the
+    active one).
+    """
     try:
-        # 1. /tmp session override — highest priority, dynamic, tmux-lifecycle
-        pin_file = f"/tmp/tether-pane-{agent}"
-        if os.path.exists(pin_file):
-            try:
-                pinned = open(pin_file).read().strip()
-                if pinned and pane_exists(pinned):
-                    return pinned
-            except Exception:
-                pass
+        return int(pane_id.lstrip("%"))
+    except (ValueError, AttributeError):
+        return 0
 
-        # 2. Persistent config — survives reboots
-        persistent = load_persistent_pins().get(agent.lower(), "")
-        if persistent and pane_exists(persistent):
-            return persistent
 
+def _scan_panes_for_agent(agent: str) -> str:
+    """Scan all tmux panes dynamically and return the best match for agent.
+
+    When multiple panes share the same command name, pick the highest pane ID
+    (most recently created).
+    """
+    result = subprocess.run(
+        ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode != 0:
+        return ""
+    patterns = AGENT_PATTERNS.get(agent.lower(), [])
+    exact_matches = []
+    pattern_candidates = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        pane_id, command, title = parts[0], parts[1], parts[2]
+        if command.lower() == agent.lower():
+            exact_matches.append(pane_id)
+            continue
+        for pat in patterns:
+            if pat.search(title) or pat.search(command):
+                pattern_candidates.append(pane_id)
+                break
+
+    # Among exact matches, newest session (highest ID) wins
+    if exact_matches:
+        return max(exact_matches, key=_pane_id_num)
+
+    # Among pattern candidates, prefer those confirmed by pane_matches_agent
+    confirmed = [p for p in pattern_candidates if pane_matches_agent(p, agent)]
+    if confirmed:
+        return max(confirmed, key=_pane_id_num)
+
+    # Last resort: any pane that matches by content scan
+    fallback = [
+        parts[0] for line in result.stdout.splitlines()
+        if len((parts := line.split("|", 2))) >= 1 and pane_matches_agent(parts[0], agent)
+    ]
+    if fallback:
+        return max(fallback, key=_pane_id_num)
+
+    return ""
+
+
+def discover_tmux_agents() -> list[dict]:
+    """Scan all tmux panes once and return every known agent detected.
+
+    Returns a list of {"agent": name, "pane": pane_id} for each AGENT_PATTERNS
+    entry that matches a live pane. This powers dashboard auto-discovery so a
+    user can register an agent without knowing any port or pane details.
+    """
+    try:
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}|#{pane_current_command}|#{pane_title}"],
             capture_output=True, text=True, timeout=5,
         )
-        if result.returncode != 0:
-            return ""
-        patterns = AGENT_PATTERNS.get(agent.lower(), [])
-        candidates = []
-        for line in result.stdout.splitlines():
-            parts = line.split("|", 2)
-            if len(parts) < 3:
-                continue
-            pane_id, command, title = parts[0], parts[1], parts[2]
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+
+    panes = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        panes.append((parts[0], parts[1], parts[2]))  # (pane_id, command, title)
+
+    detected: dict[str, str] = {}
+    for agent, patterns in AGENT_PATTERNS.items():
+        best = ""
+        for pane_id, command, title in panes:
             if command.lower() == agent.lower():
-                return pane_id
+                if not best or _pane_id_num(pane_id) > _pane_id_num(best):
+                    best = pane_id
+                continue
             for pat in patterns:
                 if pat.search(title) or pat.search(command):
-                    candidates.append(pane_id)
+                    if not best or _pane_id_num(pane_id) > _pane_id_num(best):
+                        best = pane_id
                     break
-        for pane_id in candidates:
-            if pane_matches_agent(pane_id, agent):
-                return pane_id
-        for line in result.stdout.splitlines():
-            parts = line.split("|", 2)
-            if len(parts) < 3:
-                continue
-            pane_id = parts[0]
-            if pane_matches_agent(pane_id, agent):
-                return pane_id
+        if best:
+            detected[agent] = best
+
+    return [{"agent": a, "pane": p} for a, p in detected.items()]
+
+
+def resolve_pane(agent: str) -> str:
+    try:
+        # 1. /tmp session override — highest priority, tmux-lifecycle
+        pin_file = f"/tmp/tether-pane-{agent}"
+        if os.path.exists(pin_file):
+            try:
+                pinned = open(pin_file).read().strip()
+                if pinned and pane_exists(pinned) and pane_matches_agent(pinned, agent):
+                    return pinned
+            except Exception:
+                pass
+
+        # 2. Dynamic scan first — always authoritative
+        found = _scan_panes_for_agent(agent)
+        if found:
+            return found
+
+        # 3. Persistent config as fallback (e.g. pane temporarily hidden/swapped)
+        persistent = load_persistent_pins().get(agent.lower(), "")
+        if persistent and pane_exists(persistent):
+            return persistent
+
         return ""
     except Exception:
         logger.exception("failed to resolve pane", extra={"agent": agent})
@@ -318,17 +405,25 @@ def inject_when_idle(notification: str, agent: str, state: dict) -> None:
         update_state(state, last_inject_attempt_at=now_iso(), last_inject_success=False, last_delivery_path="disabled")
         return
     pane = ""
-    deadline = time.time() + IDLE_MAX_WAIT
-    pane_was_idle = False
-    while time.time() < deadline:
-        pane = resolve_pane(agent)
-        if not pane:
+    hard_deadline = time.time() + IDLE_RETRY_DEADLINE
+    while time.time() < hard_deadline:
+        # Poll for idle pane within the short first-pass window, then retry coarsely
+        window_end = min(time.time() + IDLE_MAX_WAIT, hard_deadline)
+        pane_found_idle = False
+        while time.time() < window_end:
+            pane = resolve_pane(agent)
+            if pane and pane_is_idle(pane):
+                pane_found_idle = True
+                break
             time.sleep(IDLE_POLL_INTERVAL)
-            continue
-        if pane_is_idle(pane):
-            pane_was_idle = True
+        if pane_found_idle:
             break
-        time.sleep(IDLE_POLL_INTERVAL)
+        if not pane:
+            # No pane at all yet — keep waiting coarsely
+            time.sleep(5)
+            continue
+        # Pane exists but was busy — wait a bit before next retry cycle
+        time.sleep(3)
     if not pane:
         update_state(
             state,
@@ -340,13 +435,25 @@ def inject_when_idle(notification: str, agent: str, state: dict) -> None:
         )
         deliver_desktop(notification, state, "no tmux pane found")
         return
+    if not pane_is_idle(pane):
+        # Hard deadline expired with pane still busy — fall back to desktop
+        update_state(
+            state,
+            pane=pane,
+            last_inject_attempt_at=now_iso(),
+            last_inject_pane=pane,
+            last_pane_was_idle=False,
+            last_inject_success=False,
+        )
+        deliver_desktop(notification, state, "pane busy past retry deadline")
+        return
     try:
         update_state(
             state,
             pane=pane,
             last_inject_attempt_at=now_iso(),
             last_inject_pane=pane,
-            last_pane_was_idle=pane_was_idle,
+            last_pane_was_idle=True,
         )
         literal = subprocess.run(["tmux", "send-keys", "-t", pane, "-l", notification], check=False)
         time.sleep(0.5)
@@ -473,6 +580,52 @@ class PingHandler(BaseHTTPRequestHandler):
         pass
 
 
+def _db_path() -> str:
+    """Resolve the Tether DB path the same way the dashboard server does."""
+    env = os.environ.get("TETHER_DB")
+    if env:
+        return env
+    xdg = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    return os.path.join(xdg, "tether", "postoffice.db")
+
+
+def _heartbeat_loop(agent: str, port: int, stop_event: threading.Event) -> None:
+    """Background thread: write presence heartbeat every 5 seconds."""
+    try:
+        import sqlite3 as _sqlite3
+        db = _db_path()
+        os.makedirs(os.path.dirname(db), exist_ok=True)
+        conn = _sqlite3.connect(db)
+        conn.row_factory = _sqlite3.Row
+        # Ensure table exists (may be first boot before SQLiteRuntime initialises it)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_presence (
+                agent TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'offline',
+                pid INTEGER, ping_port INTEGER, last_heartbeat TEXT,
+                registered_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+        pid = os.getpid()
+        while not stop_event.is_set():
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            conn.execute(
+                "INSERT INTO tether_presence (agent, status, pid, ping_port, last_heartbeat, registered_at) "
+                "VALUES (?, 'online', ?, ?, ?, ?) "
+                "ON CONFLICT(agent) DO UPDATE SET status='online', pid=excluded.pid, "
+                "ping_port=excluded.ping_port, last_heartbeat=excluded.last_heartbeat",
+                (agent, pid, port, now, now),
+            )
+            conn.commit()
+            stop_event.wait(5)
+        # Mark offline on clean shutdown
+        conn.execute("UPDATE tether_presence SET status='offline', pid=NULL WHERE agent=?", (agent,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # heartbeat failure must never crash the delivery daemon
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tether ping daemon")
     parser.add_argument("--agent", required=True)
@@ -485,11 +638,12 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     if not uses_desktop_notify(args.agent, args.delivery_mode):
-        startup_pane = resolve_pane(args.agent)
+        startup_pane = _scan_panes_for_agent(args.agent)
         if startup_pane:
+            save_persistent_pin(args.agent, startup_pane)
             logger.info("resolved tmux pane on startup", extra={"agent": args.agent, "pane": startup_pane})
         else:
-            logger.warning("no tmux pane found on startup", extra={"agent": args.agent})
+            logger.warning("no tmux pane found on startup — will retry dynamically on each ping", extra={"agent": args.agent})
 
     state = {
         "lock": threading.Lock(),
@@ -502,6 +656,19 @@ def main():
         "last_inject_pane": None,
         "last_delivery_path": None,
     }
+
+    stop_event = threading.Event()
+    hb_thread = threading.Thread(
+        target=_heartbeat_loop, args=(args.agent, args.port, stop_event), daemon=True
+    )
+    hb_thread.start()
+
+    import signal
+    def _shutdown(sig, frame):
+        stop_event.set()
+        hb_thread.join(timeout=6)
+        server.shutdown()
+    signal.signal(signal.SIGTERM, _shutdown)
 
     def handler_factory(*a, **kw):
         return PingHandler(*a, agent=args.agent, state=state, delivery_mode=args.delivery_mode, **kw)
@@ -517,6 +684,8 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        stop_event.set()
+        hb_thread.join(timeout=6)
         server.shutdown()
 
 

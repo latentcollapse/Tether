@@ -161,6 +161,42 @@ def _build_parser():
     delete_parser = subparsers.add_parser("delete", help="Delete a handle")
     delete_parser.add_argument("handle", help="Handle to delete")
 
+    # serve command — agent-as-service wake receiver
+    serve_parser = subparsers.add_parser(
+        "serve", help="Run this agent's wake receiver (no-tmux delivery)")
+    serve_parser.add_argument("--agent", required=True, help="This agent's identity")
+    serve_parser.add_argument("--port", type=int, default=0, help="0 = auto-assign")
+    serve_parser.add_argument("--wake", default=None, help="Shell command to run per tmail")
+    serve_parser.add_argument("--inject", action="store_true", help="Also use tmux/desktop fallback")
+    serve_parser.add_argument("--delivery-mode", choices=("desktop", "tmux"), default="desktop")
+
+    # mux command — run an agent inside a Tether-owned PTY (no-tmux delivery)
+    mux_parser = subparsers.add_parser(
+        "mux", help="Run an agent inside a Tether PTY; tmails autofire into its input")
+    mux_parser.add_argument("--agent", required=True, help="Agent identity")
+    mux_parser.add_argument("--port", type=int, default=0, help="0 = auto-assign")
+    mux_parser.add_argument("--quiet-ms", type=int, default=800,
+                            help="Stream must be quiet this long before injecting")
+    mux_parser.add_argument("mux_command", nargs=argparse.REMAINDER,
+                            help="-- followed by the agent command")
+
+    # agents command — view/edit the registry (source of truth)
+    agents_parser = subparsers.add_parser("agents", help="View or edit the agent registry")
+    agents_parser.add_argument("--add", metavar="ID", help="Add/update an agent id")
+    agents_parser.add_argument("--name", help="Display name (with --add)")
+    agents_parser.add_argument("--cli", help="CLI label (with --add)")
+    # dest must not be 'command' — that's the subparsers dest and would collide
+    agents_parser.add_argument("--command", dest="launch_command", help="Launch command (with --add)")
+    agents_parser.add_argument("--remove", metavar="ID", help="Remove an agent id")
+
+    # konsole command — inspect/drive Konsole tabs over D-Bus (KDE auto-wire)
+    konsole_parser = subparsers.add_parser("konsole", help="List or inject into Konsole tabs (KDE)")
+    konsole_parser.add_argument("konsole_action", choices=("list", "send"), help="list tabs or send text")
+    konsole_parser.add_argument("--session", help="Session path, e.g. /Sessions/7 (with send)")
+    konsole_parser.add_argument("--service", help="Konsole D-Bus service (defaults to first found)")
+    konsole_parser.add_argument("--text", help="Text to inject (with send)")
+    konsole_parser.add_argument("--no-enter", action="store_true", help="Don't press Enter after text")
+
     return parser
 
 
@@ -173,18 +209,97 @@ def _dashboard_dist_dir() -> Path | None:
     repo_root = Path(__file__).resolve().parents[1]
     candidates.extend(
         [
+            repo_root / "tether-dashboard" / "dist" / "app" / "browser",
+            repo_root / "tether-dashboard" / "dist" / "app",
             repo_root / "tether-dashboard" / "dist",
+            Path.cwd() / "tether-dashboard" / "dist" / "app" / "browser",
+            Path.cwd() / "tether-dashboard" / "dist" / "app",
             Path.cwd() / "tether-dashboard" / "dist",
         ]
     )
 
     for candidate in candidates:
-        if candidate.is_dir():
+        # Angular 19 SSR: root shell is index.csr.html; pre-rendered routes have index.html
+        if (candidate / "index.csr.html").is_file() or (candidate / "index.html").is_file():
             return candidate
     return None
 
 def _dashboard_db_path() -> str:
     return os.environ.get("TETHER_DB") or _default_db_path()
+
+
+_DASHBOARD_PORT = DEFAULT_DASHBOARD_PORT
+
+
+def _dashboard_server_port() -> int:
+    return _DASHBOARD_PORT
+
+
+def _resolve_handle_text_main(handle: str) -> str:
+    """Resolve a tmail handle to its instruction text (best-effort)."""
+    if not handle:
+        return ""
+    try:
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            value = rt.resolve(handle)
+        finally:
+            rt.close()
+        if isinstance(value, dict):
+            return str(value.get("text") or value.get("content") or "")
+        return str(value) if value is not None else ""
+    except Exception:
+        return ""
+
+
+def _detect_running_clis() -> list[dict]:
+    """Scan /proc for processes matching registry launch commands.
+
+    Returns [{agent, pid, wrapped}] where `wrapped` means the process is a
+    `tether mux` host (so injection works) vs. a bare CLI launched directly
+    (detectable, but can't be woken until relaunched through the mux).
+    Linux-only; returns [] elsewhere or on any error.
+    """
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return []
+    try:
+        from tether.agent_config import load_agents
+        registry = load_agents()
+    except Exception:
+        return []
+    # Map command basename → agent id
+    by_basename: dict[str, str] = {}
+    for a in registry:
+        cmd = (a.get("command") or "").strip()
+        if cmd:
+            by_basename[os.path.basename(cmd.split()[0])] = a["id"]
+
+    hits: list[dict] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().split(b"\x00")
+        except (OSError, ValueError):
+            continue
+        argv = [p.decode("utf-8", "replace") for p in cmdline if p]
+        if not argv:
+            continue
+        wrapped = any("tether" in a for a in argv) and "mux" in argv
+        # A mux host: find which agent via --agent
+        if wrapped and "--agent" in argv:
+            try:
+                agent_id = argv[argv.index("--agent") + 1]
+                hits.append({"agent": agent_id, "pid": int(entry.name), "wrapped": True})
+                continue
+            except (ValueError, IndexError):
+                pass
+        # A bare CLI: match the executable basename to the registry
+        base = os.path.basename(argv[0])
+        if base in by_basename:
+            hits.append({"agent": by_basename[base], "pid": int(entry.name), "wrapped": False})
+    return hits
 
 
 def _find_free_port(start_port: int = DEFAULT_DASHBOARD_PORT) -> int:
@@ -326,7 +441,8 @@ def _handle_summary(row: sqlite3.Row) -> dict:
 
 
 def _create_dashboard_app(dist_dir: Path):
-    from fastapi import FastAPI, HTTPException
+    import asyncio
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse
 
     app = FastAPI(title="Tether Dashboard")
@@ -783,12 +899,478 @@ def _create_dashboard_app(dist_dir: Path):
         finally:
             runtime.close()
 
+    # --- Channel API ---
+
+    @app.get("/api/channels")
+    def get_channels():
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            return runtime.channel_list()
+        finally:
+            runtime.close()
+
+    @app.post("/api/channels")
+    def post_channel(payload: dict):
+        if "name" not in payload:
+            raise HTTPException(status_code=400, detail="Missing field: name")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            channel_id = runtime.channel_create(
+                name=payload["name"],
+                description=payload.get("description", ""),
+                members=payload.get("members", []),
+            )
+            channels = runtime.channel_list()
+            chan = next((c for c in channels if c["id"] == channel_id), {"id": channel_id})
+            return chan
+        finally:
+            runtime.close()
+
+    @app.post("/api/channels/delete")
+    def delete_channel(payload: dict):
+        if "id" not in payload:
+            raise HTTPException(status_code=400, detail="Missing field: id")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime._conn.execute("DELETE FROM tether_channel_messages WHERE channel_id = ?", [payload["id"]])
+            runtime._conn.execute("DELETE FROM tether_channel_members WHERE channel_id = ?", [payload["id"]])
+            runtime._conn.execute("DELETE FROM tether_channels WHERE id = ?", [payload["id"]])
+            runtime._conn.commit()
+            return {"id": payload["id"], "status": "deleted"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/channels/join")
+    def join_channel(payload: dict):
+        if "id" not in payload or "agent" not in payload:
+            raise HTTPException(status_code=400, detail="Missing field: id or agent")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.channel_join(payload["id"], payload["agent"])
+            return {"id": payload["id"], "agent": payload["agent"], "status": "joined"}
+        finally:
+            runtime.close()
+
+    @app.post("/api/channels/leave")
+    def leave_channel(payload: dict):
+        if "id" not in payload or "agent" not in payload:
+            raise HTTPException(status_code=400, detail="Missing field: id or agent")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            runtime.channel_leave(payload["id"], payload["agent"])
+            return {"id": payload["id"], "agent": payload["agent"], "status": "left"}
+        finally:
+            runtime.close()
+
+    @app.get("/api/channels/{channel_id}/messages")
+    def get_channel_messages(channel_id: str, limit: int = 100, offset: int = 0):
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            return runtime.channel_get_messages(channel_id, limit=limit, offset=offset)
+        finally:
+            runtime.close()
+
+    @app.post("/api/channels/{channel_id}/messages")
+    def send_channel_message(channel_id: str, payload: dict):
+        if "sender" not in payload or "body" not in payload:
+            raise HTTPException(status_code=400, detail="Missing field: sender or body")
+        runtime = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            msg_id = runtime.channel_send_message(
+                channel_id,
+                sender=payload["sender"],
+                body=payload["body"],
+                thread_id=payload.get("threadId"),
+            )
+            return {"id": msg_id, "channelId": channel_id, "status": "sent"}
+        finally:
+            runtime.close()
+
+    # ── Multiplexer: Presence ─────────────────────────────────────────────────
+
+    @app.get("/api/presence")
+    def get_presence():
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            return {"agents": rt.presence_list()}
+        finally:
+            rt.close()
+
+    @app.post("/api/presence/heartbeat")
+    def post_heartbeat(payload: dict):
+        agent = str(payload.get("agent") or "").strip()
+        if not agent:
+            raise HTTPException(status_code=400, detail="agent required")
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            rt.presence_heartbeat(agent)
+            return {"ok": True}
+        finally:
+            rt.close()
+
+    @app.post("/api/presence/connect")
+    def post_connect(payload: dict):
+        """Spawn a ping_daemon for the given agent (LOCAL tier).
+
+        Zero-config: the caller supplies only an agent name. The dashboard
+        picks a free port, spawns the daemon in 'auto' mode (which discovers
+        the agent's tmux pane and falls back to desktop notify), and shares
+        its own database with the daemon via the TETHER_DB env var.
+        """
+        import subprocess as _sp
+        import os as _os
+        import socket as _sock
+        agent = str(payload.get("agent") or "").strip()
+        if not agent:
+            raise HTTPException(status_code=400, detail="agent required")
+        mode = str(payload.get("mode") or "auto").strip()
+        if mode not in ("auto", "desktop", "tmux"):
+            mode = "auto"
+        # Auto-assign a free ephemeral port — the user never needs to know it
+        with _sock.socket() as s:
+            s.bind(("localhost", 0))
+            port = s.getsockname()[1]
+        db_path = _dashboard_db_path()
+        rt = SQLiteRuntime(db_path=db_path)
+        try:
+            # Kill any stale daemon for this agent first
+            existing = [a for a in rt.presence_list(stale_seconds=86400)
+                        if a["agent"] == agent and a.get("pid")]
+            for stale in existing:
+                try:
+                    _os.kill(stale["pid"], 15)  # SIGTERM
+                except (ProcessLookupError, TypeError):
+                    pass
+            # CRITICAL: share the dashboard's DB with the daemon so heartbeats
+            # land in the same file the dashboard reads.
+            child_env = dict(_os.environ)
+            child_env["TETHER_DB"] = db_path
+            # Spawn the agent-as-service wake receiver. It owns an HTTP socket,
+            # queues tmails for loop/one-shot agents to pull, and registers its
+            # own endpoint. --inject keeps the tmux/desktop bridge alive so
+            # terminal REPLs still wake until they migrate to listener mode.
+            cmd = [sys.executable, "-m", "tether.agent_server",
+                   "--agent", agent, "--port", str(port)]
+            if mode in ("auto", "tmux", "desktop"):
+                cmd.append("--inject")
+                cmd.extend(["--delivery-mode", "tmux" if mode == "tmux" else "desktop"])
+            proc = _sp.Popen(
+                cmd,
+                cwd=str(_repo_root()),
+                env=child_env,
+                start_new_session=True,
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+            )
+            # agent_server registers its own endpoint, but set it here too so the
+            # URL is present immediately for callers that read before first beat.
+            rt.set_ping_url(agent, f"http://localhost:{port}")
+            rt.presence_register(agent, pid=proc.pid, ping_port=port)
+            return {"ok": True, "agent": agent, "pid": proc.pid, "port": port, "mode": mode}
+        finally:
+            rt.close()
+
+    @app.get("/api/registry")
+    def get_registry():
+        """The agent registry — source of truth for known team members."""
+        from tether.agent_config import load_agents, config_path
+        return {"agents": load_agents(), "path": config_path()}
+
+    @app.post("/api/registry")
+    def post_registry(payload: dict):
+        from tether.agent_config import upsert_agent
+        if not payload.get("id"):
+            raise HTTPException(status_code=400, detail="id required")
+        return {"agents": upsert_agent(payload)}
+
+    @app.post("/api/registry/delete")
+    def delete_registry(payload: dict):
+        from tether.agent_config import remove_agent
+        agent_id = str(payload.get("id") or "").strip()
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="id required")
+        return {"agents": remove_agent(agent_id)}
+
+    @app.get("/api/konsole/sessions")
+    def konsole_sessions():
+        """Live Konsole tabs with a best-guess agent identity from the registry."""
+        from tether import konsole_driver
+        if not konsole_driver.available():
+            return {"available": False, "sessions": []}
+        from tether.agent_config import load_agents
+        registry = load_agents()
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            bound = {b["session"]: b["agent"] for b in rt.konsole_bindings()}
+        finally:
+            rt.close()
+        sessions = konsole_driver.list_sessions()
+        for s in sessions:
+            s["boundAgent"] = bound.get(s["session"])
+            s["guessedAgent"] = s["boundAgent"] or konsole_driver.guess_agent(s, registry)
+        return {"available": True, "sessions": sessions}
+
+    @app.post("/api/konsole/bind")
+    def konsole_bind(payload: dict):
+        """Bind an agent id to a Konsole tab: stamp the title, register delivery."""
+        from tether import konsole_driver
+        agent = str(payload.get("agent") or "").strip()
+        service = str(payload.get("service") or "").strip()
+        session = str(payload.get("session") or "").strip()
+        if not (agent and service and session):
+            raise HTTPException(status_code=400, detail="agent, service, session required")
+        konsole_driver.set_title(service, session, agent)
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            rt.konsole_bind(agent, service, session)
+            # Delivery for a konsole agent routes back to this server, which
+            # injects via D-Bus. That endpoint becomes the agent's ping URL.
+            deliver_url = f"http://localhost:{_dashboard_server_port()}/api/konsole/deliver?agent={agent}"
+            rt.set_ping_url(agent, deliver_url)
+            rt.presence_register(agent)
+            return {"ok": True, "agent": agent, "session": session}
+        finally:
+            rt.close()
+
+    @app.post("/api/konsole/unbind")
+    def konsole_unbind(payload: dict):
+        agent = str(payload.get("agent") or "").strip()
+        if not agent:
+            raise HTTPException(status_code=400, detail="agent required")
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            rt.konsole_unbind(agent)
+            rt.presence_offline(agent)
+            return {"ok": True}
+        finally:
+            rt.close()
+
+    @app.post("/api/konsole/deliver")
+    def konsole_deliver(agent: str, payload: dict):
+        """Ping target for konsole-bound agents: resolve handle, type into the tab."""
+        from tether import konsole_driver
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            binding = rt.konsole_binding(agent)
+        finally:
+            rt.close()
+        if not binding:
+            raise HTTPException(status_code=404, detail=f"no konsole binding for {agent}")
+        handle = str(payload.get("handle") or "")
+        sender = str(payload.get("from") or "unknown")
+        text = payload.get("text") or _resolve_handle_text_main(handle)
+        text = " ".join(str(text).split())
+        if text:
+            line = f"[Tether from {sender}] {text} (handle: {handle})"
+        else:
+            line = f"[Tether from {sender}] new message — resolve {handle}"
+        ok = konsole_driver.send_line(binding["service"], binding["session"], line)
+        return {"ok": ok, "agent": agent, "injected": ok}
+
+    @app.get("/api/discover")
+    def discover_agents():
+        """Discover agents available to register right now, without ports.
+
+        Combines three sources so the dashboard dropdown always has real,
+        actionable candidates:
+          - tmux: live panes matching known agent patterns (codex, gemini, …)
+          - history: recent message senders not yet present
+          - presence: agents already registered in the presence table
+        """
+        from tether import ping_daemon as _pd
+        candidates: dict[str, dict] = {}  # keyed by agent id, first (most live) wins
+
+        # 1. Live tmux panes (only meaningful while tmux is still in the loop)
+        try:
+            for hit in _pd.discover_tmux_agents():
+                candidates.setdefault(hit["agent"], {
+                    "agent": hit["agent"], "source": "tmux", "detail": hit["pane"],
+                })
+        except Exception:
+            pass
+
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            # 2. Presence table — agents with a live (or recent) mux/daemon
+            try:
+                for p in rt.presence_list(stale_seconds=86400):
+                    candidates.setdefault(p["agent"], {
+                        "agent": p["agent"], "source": "presence", "detail": p["status"],
+                    })
+            except Exception:
+                pass
+            # 3. Running CLIs detected by process scan, matched to the registry
+            try:
+                for hit in _detect_running_clis():
+                    candidates.setdefault(hit["agent"], {
+                        "agent": hit["agent"], "source": "process",
+                        "detail": f"running pid {hit['pid']} ({'wrapped' if hit['wrapped'] else 'unwrapped'})",
+                    })
+            except Exception:
+                pass
+            # 4. Recent message senders
+            try:
+                for a in agents().get("agents", []):
+                    name = a.get("name")
+                    if name:
+                        candidates.setdefault(name, {
+                            "agent": name, "source": "history", "detail": "seen in messages",
+                        })
+            except Exception:
+                pass
+            # 5. Registry — every known team member, even if not running yet
+            try:
+                from tether.agent_config import load_agents as _load_reg
+                for a in _load_reg():
+                    candidates.setdefault(a["id"], {
+                        "agent": a["id"], "source": "registry",
+                        "detail": a.get("cli", "registered"),
+                    })
+            except Exception:
+                pass
+        finally:
+            rt.close()
+
+        return {"agents": sorted(candidates.values(), key=lambda x: x["agent"])}
+
+    @app.post("/api/presence/disconnect")
+    def post_disconnect(payload: dict):
+        agent = str(payload.get("agent") or "").strip()
+        if not agent:
+            raise HTTPException(status_code=400, detail="agent required")
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            agents = [a for a in rt.presence_list(stale_seconds=86400) if a["agent"] == agent]
+            for a in agents:
+                if a.get("pid"):
+                    try:
+                        import os as _os
+                        _os.kill(a["pid"], 15)
+                    except (ProcessLookupError, TypeError):
+                        pass
+            rt.presence_offline(agent)
+            return {"ok": True}
+        finally:
+            rt.close()
+
+    # ── Multiplexer: Routes ───────────────────────────────────────────────────
+
+    @app.get("/api/routes")
+    def get_routes():
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            return {"routes": rt.route_list()}
+        finally:
+            rt.close()
+
+    @app.post("/api/routes")
+    def post_route(payload: dict):
+        from_agent = str(payload.get("from") or payload.get("from_agent") or "").strip()
+        to_agent = str(payload.get("to") or payload.get("to_agent") or "").strip()
+        if not from_agent or not to_agent:
+            raise HTTPException(status_code=400, detail="from and to required")
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            route_id = rt.route_create(from_agent, to_agent)
+            return {"ok": True, "id": route_id, "from": from_agent, "to": to_agent}
+        finally:
+            rt.close()
+
+    @app.delete("/api/routes/{route_id}")
+    def delete_route(route_id: str):
+        rt = SQLiteRuntime(db_path=_dashboard_db_path())
+        try:
+            deleted = rt.route_delete(route_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="route not found")
+            return {"ok": True}
+        finally:
+            rt.close()
+
+    # ── WebSocket: Agent presence stream ──────────────────────────────────────
+
+    @app.websocket("/ws/agents")
+    async def ws_agents(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            while True:
+                rt = SQLiteRuntime(db_path=_dashboard_db_path())
+                try:
+                    agents = rt.presence_list()
+                    routes = rt.route_list()
+                finally:
+                    rt.close()
+                await websocket.send_json({"type": "presence", "agents": agents, "routes": routes})
+                await asyncio.sleep(5)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    @app.websocket("/ws/feed")
+    async def ws_feed(websocket: WebSocket):
+        await websocket.accept()
+        last_ts: str | None = None
+        try:
+            while True:
+                with _connect_dashboard_db() as conn:
+                    if last_ts is None:
+                        # On first connect, return latest 50 items as seed
+                        rows = conn.execute(
+                            """SELECT handle, table_name, created_at, owner, sender, tags, ticket_id
+                               FROM tether_handles ORDER BY created_at DESC LIMIT 50""",
+                        ).fetchall()
+                        rows = list(reversed(rows))
+                    else:
+                        rows = conn.execute(
+                            """SELECT handle, table_name, created_at, owner, sender, tags, ticket_id
+                               FROM tether_handles WHERE created_at > ?
+                               ORDER BY created_at ASC LIMIT 50""",
+                            (last_ts,),
+                        ).fetchall()
+
+                    if rows:
+                        last_ts = rows[-1]["created_at"]
+                        items = []
+                        for row in rows:
+                            body = _decode_row_value(row)
+                            if row["table_name"] == "messages":
+                                from_agent, to_agent = _message_agents(row, body)
+                            else:
+                                from_agent = row["sender"] or row["owner"] or "tether"
+                                to_agent = row["table_name"]
+                            items.append({
+                                "id": row["handle"],
+                                "handle": row["handle"],
+                                "from": from_agent,
+                                "to": to_agent,
+                                "table": row["table_name"],
+                                "timestamp": row["created_at"],
+                            })
+                        await websocket.send_json({"type": "feed", "items": items})
+                    elif last_ts is None:
+                        last_ts = datetime.now(timezone.utc).isoformat()
+
+                await asyncio.sleep(0.75)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
     @app.get("/{path:path}", include_in_schema=False)
     def static_or_index(path: str):
         target = (dist_dir / path).resolve()
         dist_root = dist_dir.resolve()
         if path and target.is_file() and dist_root in target.parents:
             return FileResponse(target)
+        # Angular 19 SSR: try pre-rendered route index.html, then fall back to CSR shell
+        if path:
+            prerendered = (dist_dir / path / "index.html").resolve()
+            if prerendered.is_file() and dist_root in prerendered.parents:
+                return FileResponse(prerendered)
+        csr_shell = dist_dir / "index.csr.html"
+        if csr_shell.is_file():
+            return FileResponse(csr_shell)
         return FileResponse(dist_dir / "index.html")
 
     return app
@@ -804,6 +1386,8 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
         return
 
     port = _find_free_port()
+    global _DASHBOARD_PORT
+    _DASHBOARD_PORT = port
     url = f"http://localhost:{port}"
     app = _create_dashboard_app(dist_dir)
 
@@ -818,17 +1402,118 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
 
 
 def main():
+    # Preprocess sys.argv to move --db to the front (before the subcommand) so that
+    # argparse parses it successfully regardless of where it appears in the CLI call.
+    new_argv = [sys.argv[0]]
+    db_args = []
+    other_args = []
+    
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--db":
+            if i + 1 < len(sys.argv):
+                db_args = ["--db", sys.argv[i+1]]
+                i += 2
+                continue
+        elif arg.startswith("--db="):
+            db_args = [arg]
+            i += 1
+            continue
+        other_args.append(arg)
+        i += 1
+        
+    sys.argv = new_argv + db_args + other_args
+
     parser = _build_parser()
     if len(sys.argv) == 1:
         _run_dashboard(parser)
         return
 
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return
-    
+
+    # serve runs its own long-lived HTTP receiver — hand off before touching the
+    # shared runtime. It manages its own DB connection + heartbeat.
+    if args.command == "serve":
+        serve_argv = ["tether-serve", "--agent", args.agent, "--port", str(args.port)]
+        if args.wake:
+            serve_argv.extend(["--wake", args.wake])
+        if args.inject:
+            serve_argv.append("--inject")
+        serve_argv.extend(["--delivery-mode", args.delivery_mode])
+        sys.argv = serve_argv
+        from tether import agent_server
+        agent_server.main()
+        return
+
+    # mux also runs a long-lived process (PTY host) — hand off before runtime.
+    if args.command == "mux":
+        command = args.mux_command
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            # No explicit command — resolve it from the agent registry so a bare
+            # `tether mux --agent codex` just works.
+            from tether.agent_config import get_command
+            command = get_command(args.agent)
+        if not command:
+            print(f"No command for agent '{args.agent}'. Add it to the registry "
+                  f"(tether agents) or pass one: tether mux --agent {args.agent} -- <cli>")
+            return
+        from tether.pty_mux import PtyMux
+        mux = PtyMux(args.agent, command, args.quiet_ms)
+        sys.exit(mux.run(args.port))
+
+    # agents registry management (no shared runtime needed)
+    if args.command == "agents":
+        from tether import agent_config
+        if args.remove:
+            agent_config.remove_agent(args.remove)
+            print(f"Removed '{args.remove}'.")
+        elif args.add:
+            agent_config.upsert_agent({
+                "id": args.add,
+                "name": args.name or args.add,
+                "cli": args.cli or "",
+                "command": args.launch_command or "",
+            })
+            print(f"Saved '{args.add}'.")
+        print(f"Registry: {agent_config.config_path()}")
+        for a in agent_config.load_agents():
+            print(f"  {a['id']:<10} {a.get('name',''):<10} {a.get('command','(no command)')}")
+        return
+
+    # konsole inspection / injection (KDE D-Bus)
+    if args.command == "konsole":
+        from tether import konsole_driver
+        from tether.agent_config import load_agents
+        if not konsole_driver.available():
+            print("Konsole D-Bus not available (qdbus not found).")
+            return
+        if args.konsole_action == "list":
+            reg = load_agents()
+            for s in konsole_driver.list_sessions():
+                guess = konsole_driver.guess_agent(s, reg) or "-"
+                flag = " [tmux-nested]" if s["ambiguous"] else ""
+                print(f"  {s['service']}  {s['session']:<14} {s['proc']:<16} guess={guess}{flag}")
+                print(f"      cmd: {s['cmdline'][:100]}")
+            return
+        if args.konsole_action == "send":
+            if not (args.session and args.text):
+                print("send requires --session and --text")
+                return
+            service = args.service or (konsole_driver.konsole_services() or [None])[0]
+            if not service:
+                print("No Konsole service found.")
+                return
+            ok = konsole_driver.send_line(service, args.session, args.text, submit=not args.no_enter)
+            print("injected." if ok else "injection failed.")
+            return
+
     db_path = args.db
     if not os.path.exists(db_path) and args.command != "collapse":
         workspace_db = os.environ.get("TETHER_DB", _default_db_path())
