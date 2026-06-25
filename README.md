@@ -3,8 +3,8 @@
 # v2 Patch Notes - 
 Major redesign of the dashboard 
 Native multiplexing. Tmux no longer required.
-Constructed in such a way that Claude could easily set it up for you
-Not everything may work correctly. Consider this beta. Opportunity for contribution. App will flesh out and smooth out more in the coming weeks.
+Constructed in such a way that Claude could easily set it up for you.
+Not everything may work correctly. Consider this beta, and an opportunity for contribution. App will flesh out and smooth out more in the coming weeks.
 
 A content-addressed messaging layer for multi-agent development workflows. Send a message from Claude Code to Codex CLI. Wake Gemini from a tmail. Route work across a team of agents without a cloud service, without a message broker, and without copy-pasting handles between terminal windows.
 
