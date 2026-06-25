@@ -1,8 +1,11 @@
 __pycache__/
 *.pyc
 *.db
+*.db.bak
 .pytest_cache/
 build/
 *.egg-info/
+*.zip
+*.log
 
 tether-website/
