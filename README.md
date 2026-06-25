@@ -1,8 +1,9 @@
 # Tether
 
-# v2 Patch Notes - Major redesign of the dashboard and native multiplexing
-
-Constructed in such a way that Claude could easily set it up for you
+# v2 Patch Notes - 
+Major redesign of the dashboard 
+Native multiplexing. Tmux no longer required.
+Constructed in such a way that Claude could easily set it up for you via tether_lite
 
 A content-addressed messaging layer for multi-agent development workflows. Send a message from Claude Code to Codex CLI. Wake Gemini from a tmail. Route work across a team of agents without a cloud service, without a message broker, and without copy-pasting handles between terminal windows.
 
