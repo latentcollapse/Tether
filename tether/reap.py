@@ -20,16 +20,26 @@ import os
 import signal
 import time
 
-# Command-line markers identifying a Tether-owned background process. These are the
-# things that sprawl across restarts. Kept specific so we never match an unrelated
-# python process or a shell that merely mentions "tether".
+# Command-line markers identifying a Tether-owned DELIVERY/dashboard background process.
+# These are the things that sprawl across restarts. Kept specific so we never match an
+# unrelated python process or a shell that merely mentions "tether".
+#
+# NEVER reap the MCP servers (tether/mcp_server.py): those are agent-OWNED stdio
+# transports — each agent's client spawns one to call tether_receive/tether_send, and
+# they do NOT respawn mid-session. Reaping one closes that agent's tool transport
+# ("Transport closed"), which is the opposite of what we want. They are not delivery
+# sprawl; they belong to the agents, not the dashboard.
 REAP_MARKERS = (
     "tether/ping_daemon.py", "tether.ping_daemon",
     "tether.agent_server", "tether/agent_server",
     "tether.http_server", "tether/http_server",
-    "tether/mcp_server.py", "tether.mcp_server",
     "from tether.__main__ import main", "tether.__main__",
     "-m tether ",  # `python -m tether serve` style dashboard launches
+)
+
+# Hard exclusions — process markers that must NEVER be reaped even if matched above.
+REAP_NEVER = (
+    "mcp_server",  # agent-owned MCP stdio transport (see note above)
 )
 
 
@@ -55,6 +65,8 @@ def find_orphans(exclude_pids=()) -> list[tuple[int, str]]:
         cmd = _cmdline(pid)
         if not cmd or "python" not in cmd:
             continue  # only python processes — never a shell/grep mentioning tether
+        if any(n in cmd for n in REAP_NEVER):
+            continue  # agent-owned transports (MCP) are never sprawl — never kill them
         if any(m in cmd for m in REAP_MARKERS):
             found.append((pid, cmd))
     return found
