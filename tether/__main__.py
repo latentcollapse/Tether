@@ -161,6 +161,12 @@ def _build_parser():
     delete_parser = subparsers.add_parser("delete", help="Delete a handle")
     delete_parser.add_argument("handle", help="Handle to delete")
 
+    # reap command — kill orphaned delivery daemons from prior runs
+    reap_parser = subparsers.add_parser(
+        "reap", help="Kill orphaned Tether delivery daemons left over from prior runs")
+    reap_parser.add_argument("--dry-run", action="store_true",
+                             help="List what would be killed without killing anything")
+
     # serve command — agent-as-service wake receiver
     serve_parser = subparsers.add_parser(
         "serve", help="Run this agent's wake receiver (no-tmux delivery)")
@@ -236,6 +242,60 @@ _DASHBOARD_PORT = DEFAULT_DASHBOARD_PORT
 
 def _dashboard_server_port() -> int:
     return _DASHBOARD_PORT
+
+
+def _autowire_konsole_agents(port: int) -> list[str]:
+    """On dashboard startup: refresh stale routing and auto-bind live Konsole tabs.
+
+    After a restart, every ping/presence row points at a reaped process and every
+    binding may point at a closed tab, so the dashboard can't "see" the live agents.
+    This wipes that stale state, scans the live Konsole sessions, matches each to a
+    registry agent, binds it, points its ping URL at THIS dashboard's konsole_deliver
+    endpoint (the path with ACK/retry), and marks it present. The result: launching
+    `tether` picks up the running agents automatically and the Network Graph reflects
+    reality instead of days-old rows. Best-effort — never blocks startup.
+    """
+    try:
+        from tether import konsole_driver
+    except Exception:
+        return []
+    if not konsole_driver.available():
+        return []
+    try:
+        from tether.agent_config import load_agents
+        registry = load_agents()
+    except Exception:
+        registry = []
+
+    rt = SQLiteRuntime(db_path=_dashboard_db_path())
+    wired: list[str] = []
+    try:
+        # Fresh slate: prior routing/bindings/presence are all stale after a restart.
+        # presence_clear() DELETES the rows (not just marks offline) so retired/idle
+        # agents (kilo, pi) don't linger as nodes — the reconcile loop re-adds only live.
+        rt.clear_ping_endpoints()
+        rt.presence_clear()
+        rt.konsole_unbind_all()
+
+        seen: set[str] = set()
+        for s in konsole_driver.list_sessions():
+            if s.get("ambiguous"):
+                continue  # tmux-wrapped tab hides the real agent — not directly targetable
+            agent = konsole_driver.guess_agent(s, registry)
+            if not agent or agent in seen:
+                continue  # unmatched tab (e.g. a plain shell), or already wired a tab for this agent
+            seen.add(agent)
+            try:
+                konsole_driver.set_title(s["service"], s["session"], agent)  # stamp for unambiguous future guesses
+                rt.konsole_bind(agent, s["service"], s["session"])
+                rt.set_ping_url(agent, f"http://localhost:{port}/api/konsole/deliver?agent={agent}")
+                rt.presence_register(agent)
+                wired.append(agent)
+            except Exception:
+                continue  # one bad tab must not abort the whole autowire
+    finally:
+        rt.close()
+    return wired
 
 
 def _resolve_handle_text_main(handle: str) -> str:
@@ -1161,13 +1221,31 @@ def _create_dashboard_app(dist_dir: Path):
             raise HTTPException(status_code=404, detail=f"no konsole binding for {agent}")
         handle = str(payload.get("handle") or "")
         sender = str(payload.get("from") or "unknown")
-        text = payload.get("text") or _resolve_handle_text_main(handle)
-        text = " ".join(str(text).split())
-        if text:
-            line = f"[Tether from {sender}] {text} (handle: {handle})"
+        subject = str(payload.get("subject") or "")
+        # Always inject a short handle + tag, never the full body. Long bodies chunk
+        # at Konsole's ~1KB boundary and get paste-bucketed by the agent TUI, which
+        # swallows the submit Enter. The handle IS the message (content-addressed) —
+        # the agent (full-auto) resolves it via tether_receive and acts. Uniform, no
+        # length guesswork, always under the chunk boundary, always submits.
+        if handle:
+            subj = subject[:80] + "..." if len(subject) > 80 else subject
+            tail = f" re: {subj}" if subj else ""
+            line = f'[Tether from {sender}]{tail} -- run tether_receive handle="{handle}" then follow it'
         else:
-            line = f"[Tether from {sender}] new message — resolve {handle}"
+            text = " ".join(str(payload.get("text") or "").split())
+            line = (f"[Tether from {sender}] {text}")[:400] if text else f"[Tether from {sender}] new message"
         ok = konsole_driver.send_line(binding["service"], binding["session"], line)
+        # Register for ACK+retry: the inject above is fire-and-forget and races the
+        # agent's TUI redraw, so it may silently not land. The retry loop re-nudges
+        # until the recipient reads the handle (the ACK) or attempts exhaust. Only
+        # handle-bearing messages are tracked — they carry a content-addressed ACK
+        # target; raw text pings have no handle to read and stay best-effort.
+        if handle:
+            rt2 = SQLiteRuntime(db_path=_dashboard_db_path())
+            try:
+                rt2.konsole_pending_add(handle, agent, line)
+            finally:
+                rt2.close()
         return {"ok": ok, "agent": agent, "injected": ok}
 
     @app.get("/api/discover")
@@ -1388,6 +1466,20 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
         parser.print_help()
         return
 
+    # Reap orphaned delivery daemons from prior runs before bringing up a fresh
+    # stack. Tether's background processes detach on Popen and survive tab close,
+    # so without this every launch stacks another set of zombies — N copies of
+    # every daemon racing over the same ping endpoints, the source of erratic
+    # delivery. serve is the single chokepoint that brings the stack up, so this
+    # is the right place to guarantee a clean slate on every launch.
+    try:
+        from tether import reap as _reap
+        victims, _ = _reap.reap()
+        if victims:
+            print(f"Reaped {len(victims)} orphaned Tether process(es) from a prior run.", flush=True)
+    except Exception:
+        pass  # reaping is best-effort; never block startup
+
     port = _find_free_port()
     global _DASHBOARD_PORT
     _DASHBOARD_PORT = port
@@ -1399,6 +1491,37 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
     except Exception:
         pass
     print(f"Tether dashboard running at {url} — Ctrl+C to stop", flush=True)
+
+    # Autowire: refresh stale routing and auto-bind the live Konsole tabs to this
+    # dashboard's delivery endpoint, so a launch picks up the running agents with no
+    # manual binding and the Network Graph reflects reality.
+    try:
+        wired = _autowire_konsole_agents(port)
+        if wired:
+            print(f"Autowired {len(wired)} live Konsole agent(s): {', '.join(wired)}", flush=True)
+        else:
+            print("Autowire: no live Konsole agents detected yet (the reconcile loop will pick them up as they start).", flush=True)
+    except Exception:
+        pass  # autowire is best-effort; never block the server on it
+
+    # Continuous reconcile: keep presence true to live Konsole state (heartbeat live
+    # agents, auto-bind ones that start later, offline+unbind ones whose tab closed).
+    # This is what makes the Network Graph reflect reality instead of a one-shot snapshot.
+    try:
+        from tether import konsole_presence
+        konsole_presence.start(_dashboard_db_path(), port)
+    except Exception:
+        pass  # reconcile loop is an enhancement; never block the server on it
+
+    # Konsole delivery ACK+retry: re-nudge fire-and-forget injections until the
+    # recipient reads the handle. Daemon thread in this process (it owns the
+    # D-Bus binding and serves /api/konsole/deliver).
+    try:
+        from tether import konsole_retry
+        konsole_retry.start(_dashboard_db_path())
+    except Exception:
+        pass  # retry loop is an enhancement; never block the server on it
+
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
@@ -1437,6 +1560,12 @@ def main():
 
     if not args.command:
         parser.print_help()
+        return
+
+    # reap is process-level (no runtime needed) — handle before touching the DB.
+    if args.command == "reap":
+        from tether import reap as _reap
+        _reap.main(["--dry-run"] if args.dry_run else [])
         return
 
     # serve runs its own long-lived HTTP receiver — hand off before touching the

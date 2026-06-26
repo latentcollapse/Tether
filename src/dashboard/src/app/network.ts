@@ -37,15 +37,6 @@ interface DiscoveredAgent {
           >
             Register Node
           </button>
-          <button
-            id="tab-terminals"
-            (click)="onTerminalsTab()"
-            [class]="activeTab() === 'terminals'
-              ? 'px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)]'
-              : 'px-3 py-1.5 text-xs font-medium rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]/50'"
-          >
-            Terminals
-          </button>
         </div>
 
         <!-- Feed Control Indicator -->
@@ -111,6 +102,33 @@ interface DiscoveredAgent {
                       </div>
                     } @else {
                       <p class="text-[9px] text-[var(--text-muted)] mb-2 px-1">No new agents detected. Type a name to add one manually.</p>
+                    }
+
+                    <!-- Live Konsole tabs not yet bound — bind straight from here (replaces the old Terminals tab) -->
+                    @if (unboundSessions().length > 0) {
+                      <div class="border-t border-[var(--border)] pt-2 mb-2">
+                        <p class="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">Live Konsole tabs</p>
+                        <div class="space-y-1 max-h-32 overflow-y-auto">
+                          @for (s of unboundSessions(); track s.session) {
+                            <div class="flex items-center justify-between px-2 py-1 rounded border border-transparent hover:border-[var(--accent)]/30">
+                              <div class="min-w-0">
+                                <div class="text-[11px] font-mono text-[var(--text-primary)] truncate">{{ s.session }}</div>
+                                @if (s.guessedAgent) {
+                                  <div class="text-[8px] text-blue-400 uppercase tracking-wide">looks like {{ s.guessedAgent }}</div>
+                                } @else {
+                                  <div class="text-[8px] text-[var(--text-muted)] truncate">{{ s.proc }}</div>
+                                }
+                              </div>
+                              <button
+                                (click)="bindSessionToAgent(s, s.guessedAgent || '')"
+                                [disabled]="!s.guessedAgent"
+                                class="ml-2 px-2 py-0.5 text-[9px] font-bold rounded bg-[var(--accent)] text-[var(--bg-base)] disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                                [title]="s.guessedAgent ? 'Bind this tab to ' + s.guessedAgent : 'No agent guess — bind manually below'"
+                              >Bind</button>
+                            </div>
+                          }
+                        </div>
+                      </div>
                     }
 
                     <!-- Manual entry, always available -->
@@ -228,34 +246,18 @@ interface DiscoveredAgent {
                     </div>
                   </div>
 
-                  <!-- Quick Actions -->
-                  <div class="pt-1.5 border-t border-[var(--border)]/30 flex justify-between relative z-10">
+                  <!-- Actions: single kebab menu (consolidates Route/Connect/Bind/Remove) -->
+                  <div class="pt-1.5 border-t border-[var(--border)]/30 flex items-center justify-between relative z-10">
+                    <span class="text-[9px] uppercase tracking-wide"
+                          [class.text-emerald-400]="isNodeOnline(node.name)"
+                          [class.text-[var(--text-muted)]]="!isNodeOnline(node.name)"
+                    >{{ isNodeOnline(node.name) ? 'live' : 'idle' }}</span>
                     <button
-                      class="text-[9px] text-[var(--accent)] hover:bg-[var(--accent-dim)] px-1 py-0.5 rounded font-semibold"
-                      (click)="startRouting(node, $event)"
-                      title="Route connection from this node to another"
+                      class="text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--accent-dim)] px-1.5 py-0.5 rounded leading-none"
+                      (click)="toggleMenu(node, $event)"
+                      title="Agent actions"
                     >
-                      Route Link
-                    </button>
-                    @if (isNodeOnline(node.name)) {
-                      <button
-                        class="text-[9px] text-red-400/80 hover:text-red-400 hover:bg-red-500/10 px-1 py-0.5 rounded font-semibold"
-                        (click)="disconnectNode(node.name, $event)"
-                        title="Stop this agent's daemon"
-                      >Disconnect</button>
-                    } @else {
-                      <button
-                        class="text-[9px] text-emerald-400/80 hover:text-emerald-400 hover:bg-emerald-500/10 px-1 py-0.5 rounded font-semibold"
-                        (click)="connectNode(node.name, $event)"
-                        title="Start this agent's ping daemon"
-                      >Connect</button>
-                    }
-                    <button
-                      class="text-[9px] text-red-400/40 hover:text-red-400 hover:bg-red-500/10 px-1 py-0.5 rounded"
-                      (click)="deleteNode(node.id, $event)"
-                      title="De-register node from local dashboard"
-                    >
-                      Remove
+                      <span class="text-sm leading-none">⋯</span>
                     </button>
                   </div>
 
@@ -270,6 +272,34 @@ interface DiscoveredAgent {
                       <line x1="8" y1="5" x2="5" y2="8" />
                     </svg>
                   </div>
+                </div>
+              }
+
+              <!-- Per-node action menu (one open at a time; rendered outside the card so
+                   it isn't clipped by the card's overflow). Click-away overlay closes it. -->
+              @if (openMenuNode(); as mnode) {
+                <div class="absolute inset-0 z-40" (click)="closeMenu()"></div>
+                <div
+                  class="absolute z-50 w-40 bg-[var(--bg-surface)] border border-[var(--border-strong)] rounded-lg shadow-2xl py-1 animate-fade-in"
+                  [style.left.px]="mnode.x + (mnode.width || 160) - 16"
+                  [style.top.px]="mnode.y + 34"
+                >
+                  <button class="w-full text-left px-3 py-1.5 text-[11px] text-[var(--text-primary)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)]"
+                          (click)="startRouting(mnode, $event); closeMenu()">Route Link</button>
+                  @if (isNodeOnline(mnode.name)) {
+                    <button class="w-full text-left px-3 py-1.5 text-[11px] text-red-400/90 hover:bg-red-500/10"
+                            (click)="disconnectNode(mnode.name, $event); closeMenu()" title="Stop this agent's wake receiver">Disconnect</button>
+                  } @else {
+                    <button class="w-full text-left px-3 py-1.5 text-[11px] text-emerald-400/90 hover:bg-emerald-500/10"
+                            (click)="connectNode(mnode.name, $event); closeMenu()" title="Start this agent's wake receiver">Connect</button>
+                  }
+                  @if (boundSessionFor(mnode.name); as bs) {
+                    <button class="w-full text-left px-3 py-1.5 text-[11px] text-[var(--text-secondary)] hover:bg-[var(--accent-dim)]"
+                            (click)="unbindAgent(mnode.name, $event)" [title]="'Unbind ' + bs.session">Unbind tab</button>
+                  }
+                  <div class="border-t border-[var(--border)]/40 my-1"></div>
+                  <button class="w-full text-left px-3 py-1.5 text-[11px] text-red-400/70 hover:bg-red-500/10 hover:text-red-400"
+                          (click)="deleteNode(mnode.id, $event); closeMenu()" title="Remove from graph + stop its receiver">Remove</button>
                 </div>
               }
 
@@ -452,72 +482,6 @@ interface DiscoveredAgent {
             </div>
           }
 
-          <!-- Terminals Tab — live Konsole tabs, one-click bind (KDE) -->
-          @if (activeTab() === 'terminals') {
-            <div class="max-w-3xl mx-auto space-y-4" id="terminals-pane">
-              <div class="flex items-center justify-between">
-                <div>
-                  <h3 class="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wider">Live Terminal Tabs</h3>
-                  <p class="text-[11px] text-[var(--text-secondary)] mt-0.5">
-                    Detected Konsole tabs. Bind one to an agent and tmails autofire into it — no tmux, no port.
-                  </p>
-                </div>
-                <button (click)="state.loadKonsoleSessions()" class="text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] flex items-center space-x-1">
-                  <lucide-icon name="refresh-cw" [size]="12"></lucide-icon><span>Rescan</span>
-                </button>
-              </div>
-
-              @if (!state.konsoleAvailable()) {
-                <div class="p-4 rounded-xl border border-yellow-500/30 bg-yellow-500/5 text-[11px] text-yellow-300">
-                  Konsole D-Bus not detected on this host. Terminal auto-wire is KDE/Konsole-only for now
-                  (kitty / WezTerm / Windows Terminal drivers planned). Use Register Node in the meantime.
-                </div>
-              } @else if (state.konsoleSessions().length === 0) {
-                <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] text-[11px] text-[var(--text-muted)] font-mono">
-                  No Konsole tabs detected. Open a tab and launch an agent in it, then Rescan.
-                </div>
-              } @else {
-                <div class="space-y-2">
-                  @for (s of state.konsoleSessions(); track s.session) {
-                    <div class="p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-between">
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center space-x-2">
-                          <span class="text-xs font-mono font-bold text-[var(--text-primary)]">{{ s.session }}</span>
-                          @if (s.boundAgent) {
-                            <span class="text-[8px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 uppercase tracking-wide">bound → {{ s.boundAgent }}</span>
-                          } @else if (s.ambiguous) {
-                            <span class="text-[8px] px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 uppercase tracking-wide">tmux-nested</span>
-                          } @else if (s.guessedAgent) {
-                            <span class="text-[8px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 uppercase tracking-wide">looks like {{ s.guessedAgent }}</span>
-                          }
-                        </div>
-                        <div class="text-[10px] text-[var(--text-muted)] font-mono truncate mt-0.5">{{ s.proc }} · {{ s.cmdline }}</div>
-                      </div>
-
-                      <div class="flex items-center space-x-2 ml-3">
-                        @if (s.boundAgent) {
-                          <button (click)="state.unbindKonsole(s.boundAgent!)" class="px-2 py-1 text-[10px] rounded border border-[var(--border)] text-red-400/80 hover:text-red-400 hover:bg-red-500/10">Unbind</button>
-                        } @else {
-                          <select #sel class="bg-[var(--bg-base)] border border-[var(--border)] text-[11px] px-2 py-1 rounded text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]">
-                            <option value="">bind to…</option>
-                            @for (a of state.registryAgents(); track a.id) {
-                              <option [value]="a.id" [selected]="a.id === s.guessedAgent">{{ a.id }}</option>
-                            }
-                          </select>
-                          <button
-                            (click)="bindSelected(s, sel.value)"
-                            [disabled]="s.ambiguous"
-                            class="px-2 py-1 text-[10px] font-bold rounded bg-[var(--accent)] text-[var(--bg-base)] disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
-                            [title]="s.ambiguous ? 'Run the agent directly in the tab (not inside tmux) to bind' : 'Bind this tab to the selected agent'"
-                          >Bind</button>
-                        }
-                      </div>
-                    </div>
-                  }
-                </div>
-              }
-            </div>
-          }
 
         </div>
 
@@ -619,10 +583,12 @@ interface DiscoveredAgent {
 })
 export class Network {
   state = inject(TetherState);
-  activeTab = signal<'graph' | 'register' | 'terminals'>('graph');
+  activeTab = signal<'graph' | 'register'>('graph');
   // Agents discoverable right now (tmux/history/presence) not yet on the graph
   discovered = signal<DiscoveredAgent[]>([]);
   showQuickAdd = signal<boolean>(false);
+  // Per-node action menu: the node whose dropdown is currently open (null = none).
+  openMenuNode = signal<AgentNode | null>(null);
   quickAddForm = new FormGroup({
     name: new FormControl('', [Validators.required, Validators.pattern(/^[a-zA-Z0-9_-]+$/)]),
   });
@@ -700,11 +666,16 @@ export class Network {
       }, 50);
     });
 
-    // Discover agents available to register (tmux + history + presence)
+    // Discover agents available to register (tmux + history + presence) and detect
+    // live Konsole tabs (for Add Agent's bind list + per-node Unbind). Both refresh
+    // periodically so newly-launched agents/tabs appear without a reload.
     if (typeof window !== 'undefined') {
       this.refreshDiscovery();
-      // Re-scan periodically so newly-launched agents appear without a reload
-      setInterval(() => this.refreshDiscovery(), 10000);
+      this.state.loadKonsoleSessions();
+      setInterval(() => {
+        this.refreshDiscovery();
+        this.state.loadKonsoleSessions();
+      }, 10000);
     }
   }
 
@@ -715,14 +686,37 @@ export class Network {
       .catch(() => this.discovered.set([]));
   }
 
-  onTerminalsTab() {
-    this.activeTab.set('terminals');
-    this.state.loadKonsoleSessions();
+  // --- Per-node action menu (consolidates the old Terminals tab) ---
+  toggleMenu(node: AgentNode, event: MouseEvent) {
+    event.stopPropagation();
+    this.openMenuNode.set(this.openMenuNode()?.id === node.id ? null : node);
   }
 
-  bindSelected(session: any, agentId: string) {
+  closeMenu() {
+    this.openMenuNode.set(null);
+  }
+
+  /** The live Konsole session bound to this agent, if any (drives Unbind in the menu). */
+  boundSessionFor(agentName: string) {
+    return this.state.konsoleSessions().find(s => s.boundAgent === agentName) || null;
+  }
+
+  unbindAgent(agentName: string, event: MouseEvent) {
+    event.stopPropagation();
+    this.state.unbindKonsole(agentName);
+    this.closeMenu();
+  }
+
+  /** Detected Konsole tabs not yet bound to an agent — the bind candidates shown in Add Agent. */
+  unboundSessions = computed(() =>
+    this.state.konsoleSessions().filter(s => !s.boundAgent && !s.ambiguous)
+  );
+
+  /** One-click bind a detected tab to its guessed agent (or a chosen one). */
+  bindSessionToAgent(session: any, agentId: string) {
     if (!agentId || session.ambiguous) return;
     this.state.bindKonsole(agentId, session.service, session.session);
+    this.showQuickAdd.set(false);
   }
 
   sourceLabel(source: string): string {

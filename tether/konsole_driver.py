@@ -114,28 +114,36 @@ def list_sessions() -> list[dict]:
 def guess_agent(session: dict, registry: list[dict]) -> str | None:
     """Best-guess which registered agent a tab is running.
 
-    Matches the foreground process to a registry command basename, then falls
-    back to the tab title containing a known agent id.
+    Matches on WHOLE TOKENS, never loose substrings. A short agent id like "pi"
+    must NOT match an unrelated command such as `pipx install ...` — that mis-match
+    bound innocent tabs and (via title stamping) created self-reinforcing phantom
+    nodes. Tokenization splits on path separators and non-alphanumerics so the agent
+    id / command basename has to appear as its own word to count.
     """
     proc = (session.get("proc") or "").lower()
     title = (session.get("title") or "").lower()
     cmdline = (session.get("cmdline") or "").lower()
-    # 1. Title already stamped with an agent id (strongest signal — we set it)
+    title_tokens = set(re.findall(r"[a-z0-9_-]+", title))
+    cmd_tokens = set(re.findall(r"[a-z0-9_-]+", cmdline))
+    cmd_parts = cmdline.split()
+    cmd_exe = os.path.basename(cmd_parts[0]) if cmd_parts else ""
+
+    # 1. Title stamped with the agent id as a whole word (strongest — we set it).
     for a in registry:
-        if a["id"].lower() in title.split():
+        if a["id"].lower() in title_tokens:
             return a["id"]
-    # 2. Registry command basename matches the process or appears in the full
-    #    command line (catches node-based CLIs that all report as "node").
+    # 2. The executable actually being run IS the agent's command (exact basename).
     for a in registry:
         cmd = (a.get("command") or "").strip()
         if not cmd:
             continue
         base = os.path.basename(cmd.split()[0]).lower()
-        if base and (base == proc or base in proc or base in cmdline):
+        if base and (base == proc or base == cmd_exe):
             return a["id"]
-    # 3. Agent id appears in the command line (e.g. .../claude-code/cli.js)
+    # 3. Agent id appears as a whole token in the command line (e.g. node .../codex/cli.js)
     for a in registry:
-        if a["id"].lower() in cmdline:
+        aid = a["id"].lower()
+        if aid == proc or aid == cmd_exe or aid in cmd_tokens:
             return a["id"]
     return None
 

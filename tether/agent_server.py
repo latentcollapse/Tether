@@ -261,12 +261,29 @@ def main():
             "CREATE TABLE IF NOT EXISTS tether_ping_endpoints "
             "(agent TEXT PRIMARY KEY, url TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1)"
         )
-        conn.execute(
-            "INSERT INTO tether_ping_endpoints (agent, url, enabled) VALUES (?, ?, 1) "
-            "ON CONFLICT(agent) DO UPDATE SET url=excluded.url, enabled=1",
-            (args.agent, url),
-        )
-        conn.commit()
+        # Konsole-bound agents deliver via the dashboard's /api/konsole/deliver
+        # (D-Bus injection + ACK/retry — the reliable, acknowledged path). Do NOT
+        # clobber that routing: if this agent has a konsole binding, leave its ping
+        # URL alone and let the konsole path win. Only register self as the ping
+        # target for agents with no konsole binding (SDK/tmux/desktop agents).
+        konsole_bound = False
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM tether_konsole_bindings WHERE agent=?", (args.agent,)
+            ).fetchone()
+            konsole_bound = row is not None
+        except sqlite3.OperationalError:
+            konsole_bound = False  # bindings table not created yet -> no binding
+        if konsole_bound:
+            print(f"[agent_server] {args.agent} is konsole-bound; leaving ping URL "
+                  f"on the konsole D-Bus delivery path (not registering {url})", flush=True)
+        else:
+            conn.execute(
+                "INSERT INTO tether_ping_endpoints (agent, url, enabled) VALUES (?, ?, 1) "
+                "ON CONFLICT(agent) DO UPDATE SET url=excluded.url, enabled=1",
+                (args.agent, url),
+            )
+            conn.commit()
         conn.close()
     except Exception:
         pass

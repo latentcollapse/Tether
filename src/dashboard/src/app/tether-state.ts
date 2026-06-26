@@ -277,6 +277,10 @@ export class TetherState {
 
   private _apiBase = '';   // same origin — dashboard is served by the same FastAPI process
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Remembered node layout (agent name → position/size), so the graph keeps the user's
+  // arrangement across restarts WITHOUT letting localStorage dictate which agents exist.
+  // The node *set* is driven by live presence; this only restores where each one sits.
+  private _savedPositions: Record<string, { x: number; y: number; width?: number; height?: number }> = {};
 
   constructor() {
     this.loadFromLocalStorage();
@@ -435,17 +439,19 @@ export class TetherState {
     const savedWhiteboard = localStorage.getItem('tether_whiteboard');
     if (savedWhiteboard) this.whiteboardText.set(savedWhiteboard);
 
-    // Initial Nodes
+    // Node LAYOUT memory only — not the node set. The set is driven by live presence
+    // (see syncNodesFromPresence), so the graph reflects who is actually connected
+    // rather than resurrecting whoever was on screen last session (the #5 stale-graph bug).
     const savedNodes = localStorage.getItem('tether_nodes');
     if (savedNodes) {
       try {
-        this.nodes.set(JSON.parse(savedNodes));
-      } catch {
-        this.resetNodes();
-      }
-    } else {
-      this.resetNodes();
+        for (const n of JSON.parse(savedNodes) as AgentNode[]) {
+          this._savedPositions[n.name] = { x: n.x, y: n.y, width: n.width, height: n.height };
+        }
+      } catch { /* ignore malformed layout cache */ }
     }
+    // Nodes start empty; presence fills them in within a tick.
+    this.nodes.set([]);
 
     // Initial Edges
     const savedEdges = localStorage.getItem('tether_edges');
@@ -691,11 +697,14 @@ export class TetherState {
     return this.connectAgent(name);
   }
 
-  // Delete Node
+  // Delete Node — also tears down the agent's wake receiver so removal STICKS.
+  // Without the disconnect, the agent_server keeps heartbeating presence and the
+  // next /ws/agents push re-adds the node ("popped back up").
   deleteAgent(id: string) {
     const agent = this.nodes().find(n => n.id === id);
     if (!agent) return;
 
+    this.disconnectAgent(agent.name).catch(() => {});
     this.nodes.update(nodesList => nodesList.filter(n => n.id !== id));
     this.edges.update(edgesList => edgesList.filter(e => e.from !== agent.name && e.to !== agent.name));
   }
@@ -888,39 +897,51 @@ export class TetherState {
 
   initNetworkFromApi() {
     if (typeof window === 'undefined') return;
-    fetch(`${this._apiBase}/api/agents`)
+    // Seed the graph from LIVE presence (who is actually connected), not /api/agents
+    // (which inferred "online" from message history — showing dead-but-chatty agents and
+    // hiding live-but-quiet ones). The presence WebSocket then keeps it live; this fetch
+    // just avoids a blank graph before the first push arrives.
+    fetch(`${this._apiBase}/api/presence`)
       .then(r => r.json())
-      .then((data: { agents: any[], edges: any[] }) => {
-        if (!data.agents?.length) return;
-        // Map API agents → AgentNode, arrange in a circle
-        const total = data.agents.length;
-        const cx = 320, cy = 220, radius = 180;
-        const nodes: AgentNode[] = data.agents.map((a, i) => {
-          const angle = (2 * Math.PI * i) / total - Math.PI / 2;
-          return {
-            id: a.id,
-            name: a.name,
-            status: (a.status === 'online' ? 'online' : 'offline') as AgentNode['status'],
-            msgsToday: a.messagesSentToday ?? 0,
-            lastSeen: a.lastSeen ? new Date(a.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'unknown',
-            x: Math.round(cx + radius * Math.cos(angle)),
-            y: Math.round(cy + radius * Math.sin(angle)),
-          };
-        });
-        // Map API edges → NetworkEdge
-        const edges: NetworkEdge[] = data.edges.map(e => ({
-          id: e.id,
-          from: e.source,
-          to: e.target,
-          status: 'healthy' as NetworkEdge['status'],
-          lastSeen: e.lastSeen,
-        }));
-        this.nodes.set(nodes);
-        this.edges.set(edges);
-        localStorage.removeItem('tether_nodes');
-        localStorage.removeItem('tether_edges');
+      .then((data: { agents: Array<{ agent: string; status: string }> }) => {
+        this.syncNodesFromPresence(data.agents || []);
       })
       .catch(() => {});
+  }
+
+  /**
+   * Reconcile the graph node set against live presence: add a node for each present
+   * agent (restoring its saved layout position), update status, and drop nodes for
+   * agents no longer present. This is the single source of truth for the graph — it
+   * reflects reality every tick instead of a persisted or history-derived snapshot.
+   */
+  syncNodesFromPresence(agents: Array<{ agent: string; status: string }>) {
+    // Only LIVE agents belong on the graph — an inactive agent (no live tab, no
+    // heartbeat) should disappear, not linger as a red node (the pi/kilo complaint).
+    const present = new Map(agents.filter(a => a.status === 'online').map(a => [a.agent, a.status]));
+    const existing = new Map(this.nodes().map(n => [n.name, n]));
+    const cx = 320, cy = 220, radius = 180;
+    const total = Math.max(agents.length, 1);
+    let i = 0;
+    const next: AgentNode[] = [];
+    for (const [name, status] of present) {
+      const prior = existing.get(name);
+      const saved = this._savedPositions[name];
+      const angle = (2 * Math.PI * i) / total - Math.PI / 2;
+      i++;
+      next.push({
+        id: prior?.id ?? name,
+        name,
+        status: (status === 'online' ? 'online' : 'offline') as AgentNode['status'],
+        msgsToday: prior?.msgsToday ?? 0,
+        lastSeen: status === 'online' ? 'now' : (prior?.lastSeen ?? 'unknown'),
+        x: prior?.x ?? saved?.x ?? Math.round(cx + radius * Math.cos(angle)),
+        y: prior?.y ?? saved?.y ?? Math.round(cy + radius * Math.sin(angle)),
+        width: prior?.width ?? saved?.width,
+        height: prior?.height ?? saved?.height,
+      });
+    }
+    this.nodes.set(next);
   }
 
   // --- Multiplexer: Presence + Routes ---
@@ -939,11 +960,9 @@ export class TetherState {
             map[a.agent] = { status: a.status, pid: a.pid, ping_port: a.ping_port };
           }
           this.presenceMap.set(map);
-          // Sync live status into node cards
-          this.nodes.update(list => list.map(n => ({
-            ...n,
-            status: (map[n.name]?.status === 'online' ? 'online' : 'offline') as AgentNode['status'],
-          })));
+          // Drive the node SET from the live push: adds agents that appear, removes ones
+          // that vanish, updates status. The graph is now exactly what presence reports.
+          this.syncNodesFromPresence(data.agents || []);
           if (data.routes) this.routes.set(data.routes);
         } catch { /* ignore */ }
       };

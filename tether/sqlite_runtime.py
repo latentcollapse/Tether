@@ -46,6 +46,10 @@ class SQLiteRuntime:
         self._kvfold_dir = kvfold_dir(Path("kvfold"))
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Wait up to 5s for a competing writer instead of raising "database is
+        # locked" immediately — the dashboard server runs concurrent per-request
+        # runtimes plus the konsole retry loop against the same file.
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._init_db()
     
     def _init_db(self):
@@ -172,6 +176,29 @@ class SQLiteRuntime:
                 service     TEXT NOT NULL,
                 session     TEXT NOT NULL,
                 bound_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Konsole delivery ACK+retry queue (v2.1) — at-least-once notification.
+        # D-Bus sendText is fire-and-forget (returns ok before the agent's TUI
+        # has ingested the keystroke), so a single inject is a lossy datagram that
+        # races the TUI's redraw loop. Each injected handle-line is registered here
+        # and re-nudged on an interval until the recipient ACKs by reading the
+        # handle (a row in tether_reads, written when it runs tether_receive),
+        # or until attempts are exhausted. Idempotent: the handle is
+        # content-addressed, so a duplicate nudge after a read is a harmless no-op.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_konsole_pending (
+                handle          TEXT NOT NULL,
+                agent           TEXT NOT NULL,
+                line            TEXT NOT NULL,
+                attempts        INTEGER NOT NULL DEFAULT 0,
+                max_attempts    INTEGER NOT NULL DEFAULT 8,
+                interval_seconds INTEGER NOT NULL DEFAULT 20,
+                next_attempt_at TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (handle, agent)
             )
         """)
         self._conn.commit()
@@ -732,6 +759,90 @@ Welcome to your team scratchpad! Use this space to collaborate, draft code, or c
             "SELECT agent, service, session, bound_at FROM tether_konsole_bindings"
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def konsole_unbind_all(self) -> None:
+        """Drop every konsole binding — used on dashboard startup before re-binding
+        from live Konsole state (stale bindings point at closed tabs / dead PIDs)."""
+        self._conn.execute("DELETE FROM tether_konsole_bindings")
+        self._conn.commit()
+
+    def clear_ping_endpoints(self) -> None:
+        """Wipe all ping endpoints. On a fresh dashboard launch every prior URL points
+        at a reaped daemon, so we clear and let autowire + agent_servers re-register."""
+        self._conn.execute("DELETE FROM tether_ping_endpoints")
+        self._conn.commit()
+
+    def presence_all_offline(self) -> None:
+        """Mark every agent offline — a soft fresh-slate baseline (keeps the rows)."""
+        self._conn.execute("UPDATE tether_presence SET status='offline', pid=NULL")
+        self._conn.commit()
+
+    def presence_clear(self) -> None:
+        """Delete all presence rows — the hard fresh-slate on dashboard startup. The
+        reconcile loop re-adds live Konsole agents and heartbeating SDK agents re-register
+        themselves, so the table ends up containing only what is actually live (no stale
+        pi/kilo nodes leaking into the Network Graph)."""
+        self._conn.execute("DELETE FROM tether_presence")
+        self._conn.commit()
+
+    # ── Konsole delivery ACK+retry queue (v2.1) ───────────────────────────────
+
+    def is_read(self, handle: str, agent: str) -> bool:
+        """Has `agent` read `handle`? This is the delivery ACK signal — a row lands
+        in tether_reads when the agent resolves the handle via tether_receive."""
+        row = self._conn.execute(
+            "SELECT 1 FROM tether_reads WHERE handle=? AND agent=?", (handle, agent)
+        ).fetchone()
+        return row is not None
+
+    def konsole_pending_add(self, handle: str, agent: str, line: str,
+                            max_attempts: int = 8, interval_seconds: int = 20) -> None:
+        """Register a delivery for ACK+retry. attempts=1 because the caller injects
+        once immediately; the loop takes over after `interval_seconds`. Re-registering
+        the same (handle, agent) resets it to pending (covers a manual re-send)."""
+        now = datetime.now(timezone.utc)
+        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
+        self._conn.execute(
+            "INSERT INTO tether_konsole_pending "
+            "(handle, agent, line, attempts, max_attempts, interval_seconds, next_attempt_at, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, 'pending', ?, ?) "
+            "ON CONFLICT(handle, agent) DO UPDATE SET "
+            "line=excluded.line, attempts=1, max_attempts=excluded.max_attempts, "
+            "interval_seconds=excluded.interval_seconds, next_attempt_at=excluded.next_attempt_at, "
+            "status='pending', updated_at=excluded.updated_at",
+            (handle, agent, line, max_attempts, interval_seconds, next_at,
+             now.isoformat(), now.isoformat()),
+        )
+        self._conn.commit()
+
+    def konsole_pending_due(self) -> list[dict]:
+        """Pending deliveries whose next attempt is due."""
+        now = datetime.now(timezone.utc).isoformat()
+        rows = self._conn.execute(
+            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, next_attempt_at "
+            "FROM tether_konsole_pending WHERE status='pending' AND next_attempt_at <= ?",
+            (now,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def konsole_pending_mark_attempt(self, handle: str, agent: str, interval_seconds: int) -> None:
+        """Record a re-injection: bump attempts, schedule the next nudge."""
+        now = datetime.now(timezone.utc)
+        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
+        self._conn.execute(
+            "UPDATE tether_konsole_pending SET attempts=attempts+1, next_attempt_at=?, updated_at=? "
+            "WHERE handle=? AND agent=?",
+            (next_at, now.isoformat(), handle, agent),
+        )
+        self._conn.commit()
+
+    def konsole_pending_resolve(self, handle: str, agent: str, status: str) -> None:
+        """Close out a delivery: 'acked' (recipient read it) or 'exhausted' (gave up)."""
+        self._conn.execute(
+            "UPDATE tether_konsole_pending SET status=?, updated_at=? WHERE handle=? AND agent=?",
+            (status, datetime.now(timezone.utc).isoformat(), handle, agent),
+        )
+        self._conn.commit()
 
     # ── Smart Board (v2.0) ────────────────────────────────────────────────────
 
