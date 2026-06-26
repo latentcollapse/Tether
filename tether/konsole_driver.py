@@ -164,6 +164,26 @@ def set_title(service: str, session: str, title: str) -> bool:
     return _qdbus(service, session, "org.kde.konsole.Session.setTitle", "1", title) is not None
 
 
+def get_displayed_text(service: str, session: str, timeout: float = 5.0) -> str:
+    """Read the visible viewport text of a tab (Konsole getAllDisplayedText).
+
+    Viewport only — scrolled-off history is not included — which is exactly right for
+    confirming a JUST-injected line: right after injection the line sits at the bottom
+    of the viewport, so this sees it. Returns "" if the read fails."""
+    out = _qdbus(service, session, "org.kde.konsole.Session.getAllDisplayedText", "true", timeout=timeout)
+    return out or ""
+
+
+def screen_contains(service: str, session: str, needle: str) -> bool:
+    """Whether `needle` is currently visible in the tab's viewport. This is the delivery
+    confirmation signal: inject a line, then check the handle landed on screen. If it did,
+    delivery succeeded and the retry loop can stop — no need to wait for an ACK the agent
+    may be unable to give (MCP down, rate-limited, mid-task)."""
+    if not needle:
+        return False
+    return needle in get_displayed_text(service, session)
+
+
 def find_session(service: str, session_path: str) -> dict | None:
     for s in list_sessions():
         if s["service"] == service and s["session"] == session_path:

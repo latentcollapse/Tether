@@ -1235,18 +1235,25 @@ def _create_dashboard_app(dist_dir: Path):
             text = " ".join(str(payload.get("text") or "").split())
             line = (f"[Tether from {sender}] {text}")[:400] if text else f"[Tether from {sender}] new message"
         ok = konsole_driver.send_line(binding["service"], binding["session"], line)
-        # Register for ACK+retry: the inject above is fire-and-forget and races the
-        # agent's TUI redraw, so it may silently not land. The retry loop re-nudges
-        # until the recipient reads the handle (the ACK) or attempts exhaust. Only
-        # handle-bearing messages are tracked — they carry a content-addressed ACK
-        # target; raw text pings have no handle to read and stay best-effort.
+        # Confirm-on-inject: the inject is fire-and-forget and can lose a redraw race, so
+        # verify it actually landed by reading the tab's screen back for the handle. If it
+        # is there, delivery succeeded — resolve immediately, no retry needed even if the
+        # agent can't ACK (down / rate-limited / mid-task). If it did NOT land, register it
+        # for the retry loop, which re-injects and re-confirms. Only handle-bearing messages
+        # are tracked (the handle is the unique on-screen marker we look for).
+        delivered = False
         if handle:
+            import time as _time
+            _time.sleep(0.6)  # let the TUI echo the injected line before reading it back
+            delivered = konsole_driver.screen_contains(binding["service"], binding["session"], handle)
             rt2 = SQLiteRuntime(db_path=_dashboard_db_path())
             try:
                 rt2.konsole_pending_add(handle, agent, line)
+                if delivered:
+                    rt2.konsole_pending_resolve(handle, agent, "delivered")
             finally:
                 rt2.close()
-        return {"ok": ok, "agent": agent, "injected": ok}
+        return {"ok": ok, "agent": agent, "injected": ok, "delivered": delivered}
 
     @app.get("/api/discover")
     def discover_agents():

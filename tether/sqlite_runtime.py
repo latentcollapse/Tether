@@ -796,10 +796,12 @@ Welcome to your team scratchpad! Use this space to collaborate, draft code, or c
         return row is not None
 
     def konsole_pending_add(self, handle: str, agent: str, line: str,
-                            max_attempts: int = 8, interval_seconds: int = 20) -> None:
-        """Register a delivery for ACK+retry. attempts=1 because the caller injects
-        once immediately; the loop takes over after `interval_seconds`. Re-registering
-        the same (handle, agent) resets it to pending (covers a manual re-send)."""
+                            max_attempts: int = 3, interval_seconds: int = 30) -> None:
+        """Register a delivery for confirm-and-retry. attempts=1 because the caller injects
+        once immediately; the loop takes over after `interval_seconds`. Delivery is normally
+        confirmed by reading the handle back off the agent's screen (see konsole_retry), so
+        `max_attempts` is only a safety BACKSTOP for a pathological never-landing inject —
+        not the primary stop. Re-registering the same (handle, agent) resets it to pending."""
         now = datetime.now(timezone.utc)
         next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
         self._conn.execute(

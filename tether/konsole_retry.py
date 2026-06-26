@@ -40,45 +40,55 @@ import time
 
 logger = logging.getLogger(__name__)
 
-SCAN_INTERVAL_SECONDS = 5  # how often to check for due deliveries
-
-
-def _reinject(rt, agent: str, line: str) -> bool:
-    """Re-inject a handle-line using the agent's CURRENT binding (not a stored one,
-    so a rebound tab is followed). Returns whether the D-Bus call succeeded."""
-    from tether import konsole_driver
-    binding = rt.konsole_binding(agent)
-    if not binding:
-        return False
-    return konsole_driver.send_line(binding["service"], binding["session"], line)
+SCAN_INTERVAL_SECONDS = 5    # how often to check for due deliveries
+SETTLE_SECONDS = 0.6         # wait after an inject before reading the screen back
 
 
 def process_due(rt) -> dict:
     """Run one pass over due pending deliveries. Returns a small stats dict.
-    Separated from the loop so it is unit-testable and callable on demand."""
-    stats = {"acked": 0, "reinjected": 0, "exhausted": 0, "failed": 0}
+
+    Terminator is DELIVERY CONFIRMATION, not blind retry. For each pending row, in order:
+      - acked    : the agent read the handle (tether_reads) — best outcome, stop.
+      - unbound  : the agent's tab is gone — stop (nothing to deliver to).
+      - delivered: the handle is visible on the agent's screen — it landed, stop. (This is
+                   the key fix: a delivered message stops the loop even if the agent can't
+                   ACK because it's down / rate-limited / mid-task — no more futile spam.)
+      - else     : the inject genuinely didn't land (lost a redraw race) → re-inject, settle,
+                   and re-confirm. Only if it STILL hasn't landed does it count an attempt.
+    max_attempts is now just a safety backstop against a pathological never-landing inject
+    (e.g. a broken transport), not the primary stop mechanism.
+    """
+    from tether import konsole_driver
+    stats = {"acked": 0, "delivered": 0, "unbound": 0, "reinjected": 0, "exhausted": 0}
     for row in rt.konsole_pending_due():
         handle, agent = row["handle"], row["agent"]
-        # ACK check first — the recipient may have read it between attempts.
+
         if rt.is_read(handle, agent):
-            rt.konsole_pending_resolve(handle, agent, "acked")
-            stats["acked"] += 1
-            continue
-        if row["attempts"] >= row["max_attempts"]:
-            rt.konsole_pending_resolve(handle, agent, "exhausted")
-            stats["exhausted"] += 1
-            logger.warning("konsole delivery exhausted after %d attempts",
-                           row["attempts"], extra={"agent": agent, "handle": handle})
-            continue
-        ok = _reinject(rt, agent, row["line"])
-        # Bump the attempt counter regardless of D-Bus return: the call is
-        # fire-and-forget so "ok" only means the bytes were accepted, not landed.
-        # The ACK (a read) is the only real success signal; keep nudging until then.
+            rt.konsole_pending_resolve(handle, agent, "acked"); stats["acked"] += 1; continue
+
+        binding = rt.konsole_binding(agent)
+        if not binding:
+            rt.konsole_pending_resolve(handle, agent, "unbound"); stats["unbound"] += 1; continue
+        svc, sess = binding["service"], binding["session"]
+
+        # Did a prior inject already land and is still visible? Then it delivered — stop.
+        if konsole_driver.screen_contains(svc, sess, handle):
+            rt.konsole_pending_resolve(handle, agent, "delivered"); stats["delivered"] += 1; continue
+
+        # Not visible → re-inject, let it settle, and confirm it landed this time.
+        konsole_driver.send_line(svc, sess, row["line"])
+        time.sleep(SETTLE_SECONDS)
+        if konsole_driver.screen_contains(svc, sess, handle):
+            rt.konsole_pending_resolve(handle, agent, "delivered"); stats["delivered"] += 1; continue
+
+        # Still didn't land — count an attempt; give up only at the safety backstop.
         rt.konsole_pending_mark_attempt(handle, agent, row["interval_seconds"])
-        if ok:
-            stats["reinjected"] += 1
+        if row["attempts"] + 1 >= row["max_attempts"]:
+            rt.konsole_pending_resolve(handle, agent, "exhausted"); stats["exhausted"] += 1
+            logger.warning("konsole delivery never landed after %d injects (transport issue?)",
+                           row["attempts"] + 1, extra={"agent": agent, "handle": handle})
         else:
-            stats["failed"] += 1
+            stats["reinjected"] += 1
     return stats
 
 

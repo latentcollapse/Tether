@@ -1,6 +1,6 @@
 """Tether Runtime - Python implementation of the Tether data transfer format."""
 
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 
 from .full_runtime import TetherRuntime
 from .runtime import Runtime
