@@ -1,6 +1,5 @@
 # Tether
-
-# v2 Patch Notes - 
+ 
 Major redesign of the dashboard 
 Native multiplexing. Tmux no longer required.
 Constructed in such a way that Claude could easily set it up for you.
