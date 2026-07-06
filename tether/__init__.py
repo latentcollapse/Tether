@@ -1,8 +1,10 @@
 """Tether Runtime - Python implementation of the Tether data transfer format."""
 
-__version__ = "2.1.3"
+__version__ = "3.0.0"
 
-from .full_runtime import TetherRuntime
+# NOTE (3.0.0): the legacy `TetherRuntime` (full_runtime.py) was retired — superseded by
+# SQLiteRuntime, no internal consumers. Moved to the (gitignored) archive/. This drops a
+# public symbol, hence the major version bump. Use SQLiteRuntime.
 from .runtime import Runtime
 from .sqlite_runtime import SQLiteRuntime
 from .lc import encode_lc_b, decode_lc_b
@@ -19,7 +21,6 @@ from .exceptions import (
 )
 
 __all__ = [
-    "TetherRuntime",
     "Runtime",
     "SQLiteRuntime",
     "Transport",

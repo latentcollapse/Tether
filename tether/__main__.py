@@ -33,6 +33,16 @@ def _user_data_db_path() -> str:
 
 
 def _default_db_path() -> str:
+    # The XDG user-data DB (native filesystem) is the source of truth. The repo/cwd-local
+    # postoffice.db is a LEGACY fallback ONLY: on /mnt/d it lives on a fuseblk mount where
+    # SQLite's fcntl advisory locks are broken, and — worse — an empty repo-local DB will
+    # silently shadow the real XDG DB, splitting the CLI (no TETHER_DB) off from the MCP
+    # servers (explicit TETHER_DB). Root-caused as a split-brain during the 2026-07-03/04
+    # migration; prefer XDG whenever it exists so the fuseblk file can never win again.
+    user_db = _user_data_db_path()
+    if os.path.exists(user_db):
+        return user_db
+
     cwd_db = Path.cwd() / "postoffice.db"
     if cwd_db.exists():
         return str(cwd_db)
@@ -41,7 +51,7 @@ def _default_db_path() -> str:
     if repo_db.exists():
         return str(repo_db)
 
-    return _user_data_db_path()
+    return user_db
 
 
 def _ensure_db_parent(db_path: str) -> None:
@@ -49,6 +59,49 @@ def _ensure_db_parent(db_path: str) -> None:
         return
     parent = Path(db_path).expanduser().resolve().parent
     parent.mkdir(parents=True, exist_ok=True)
+
+
+def _konsole_wake(*, to_agent: str, from_agent: str, subject: str, handle: str) -> bool:
+    """Best-effort DIRECT Konsole D-Bus injection to wake a live agent pane.
+
+    The normal ping route (get_ping_url -> the dashboard's /api/konsole/deliver endpoint)
+    only injects when the DASHBOARD is running. With the dashboard/MCP down there is no
+    ping endpoint, so a plain `tether send` used to reach only the DB inbox and the passive
+    ~/.tether_notify file — the recipient's pane never woke (root cause of "the PSA didn't
+    hit their prompt boxes", 2026-07-05). This fallback resolves the recipient's live
+    Konsole session itself and injects the wake, so `tether send` wakes a konsole-hosted
+    agent on its own. Uses LIVE session discovery (not the bindings table, which goes stale
+    after restarts — the recurring delivery bug). Never raises; returns True only on a real
+    inject so the caller knows whether to still drop the passive notify file.
+    """
+    if not to_agent or to_agent == from_agent:
+        return False
+    try:
+        from tether import konsole_driver
+    except Exception:
+        return False
+    if not konsole_driver.available():
+        return False
+    try:
+        from tether.agent_config import load_agents
+        registry = load_agents()
+    except Exception:
+        registry = []
+    try:
+        target = None
+        for s in konsole_driver.list_sessions():
+            if s.get("ambiguous"):
+                continue  # tmux-nested tab hides the real agent — not directly targetable
+            if konsole_driver.guess_agent(s, registry) == to_agent:
+                target = s
+                break
+        if target is None:
+            return False  # recipient not a live konsole agent — inbox delivery still stands
+        line = (f"[Tether] New message from {from_agent}: {subject} "
+                f"— run `tether inbox --agent {to_agent}` (handle {handle})")
+        return bool(konsole_driver.send_line(target["service"], target["session"], line, submit=True))
+    except Exception:
+        return False
 
 
 def _send_message_with_ping(
@@ -78,6 +131,11 @@ def _send_message_with_ping(
         sender=from_agent,
         ticket_id=ticket_id,
     )
+    # Delivery ladder, each rung a fallback for the one above:
+    #  1. HTTP ping -> dashboard's konsole_deliver (ACK/retry) — best, needs the dashboard up.
+    #  2. DIRECT Konsole injection — wakes the pane with NO dashboard (the gap we just closed).
+    #  3. Passive ~/.tether_notify — rendered on the recipient's next prompt (last resort).
+    delivered = False
     ping_url = runtime.get_ping_url(to_agent)
     if ping_url:
         payload = json.dumps({
@@ -96,15 +154,23 @@ def _send_message_with_ping(
         try:
             with urllib.request.urlopen(req, timeout=2):
                 pass
+            delivered = True
         except Exception:
-            # HTTP blocked (sandboxed process) — fall back to notify file
-            # which PROMPT_COMMAND picks up on the recipient's next render.
-            try:
-                notify_path = os.path.join(os.path.expanduser("~"), ".tether_notify")
-                with open(notify_path, "w", encoding="utf-8") as f:
-                    f.write(f"[Tether] From agent: {from_agent}  Handle: '{handle}'\n")
-            except Exception:
-                pass
+            # HTTP blocked / dashboard down — fall through to direct injection.
+            pass
+    if not delivered:
+        delivered = _konsole_wake(
+            to_agent=to_agent, from_agent=from_agent, subject=subject, handle=handle
+        )
+    if not delivered:
+        # Neither route reached a live pane — leave a passive breadcrumb the recipient's
+        # PROMPT_COMMAND picks up on its next render.
+        try:
+            notify_path = os.path.join(os.path.expanduser("~"), ".tether_notify")
+            with open(notify_path, "w", encoding="utf-8") as f:
+                f.write(f"[Tether] From agent: {from_agent}  Handle: '{handle}'\n")
+        except Exception:
+            pass
     return handle
 
 
@@ -113,7 +179,7 @@ def _build_parser():
         description="Tether CLI - LLM-to-LLM messaging & organization",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--db", default=os.environ.get("TETHER_DB", _default_db_path()), help="Database path")
+    parser.add_argument("--db", default=None, help="Database path (default: $TETHER_DB, else the XDG user-data DB). An explicit path is honored verbatim and created if missing.")
     
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
@@ -203,6 +269,70 @@ def _build_parser():
     konsole_parser.add_argument("--text", help="Text to inject (with send)")
     konsole_parser.add_argument("--no-enter", action="store_true", help="Don't press Enter after text")
 
+    # board command — direct, headless board access. The board lives in SQLite, so this
+    # is the universal bash path agents use when the MCP transport is unavailable: ticket
+    # creation never has to fall back to loose markdown files. Works with NO dashboard.
+    board_parser = subparsers.add_parser(
+        "board", help="Smart board: create/manage tickets headlessly (no dashboard or MCP needed)")
+    board_sub = board_parser.add_subparsers(dest="board_action", required=True)
+
+    bp = board_sub.add_parser("propose", help="Propose a ticket into the proposed holding state")
+    bp.add_argument("--category", required=True)
+    bp.add_argument("--tier", required=True)
+    bp.add_argument("--title", required=True)
+    bp.add_argument("--description", required=True)
+    bp.add_argument("--from", dest="from_agent", default="unknown")
+
+    ba = board_sub.add_parser("author", help="Admin: author a ticket directly onto the board (auto ID)")
+    ba.add_argument("--category", required=True)
+    ba.add_argument("--tier", required=True)
+    ba.add_argument("--title", required=True)
+    ba.add_argument("--description", required=True)
+    ba.add_argument("--status", default="open")
+    ba.add_argument("--from", dest="from_agent", default="unknown")
+    ba.add_argument("--batch")
+    ba.add_argument("--principle", nargs="*")
+    ba.add_argument("--bible-ref", dest="bible_ref", nargs="*")
+    ba.add_argument("--gate")
+    ba.add_argument("--blocks", nargs="*")
+    ba.add_argument("--blocked-by", dest="blocked_by", nargs="*")
+
+    bac = board_sub.add_parser("accept", help="Admin: accept a proposed ticket, assigning a real ID")
+    bac.add_argument("--id", required=True)
+    bac.add_argument("--tier")
+    bac.add_argument("--from", dest="from_agent", default="unknown")
+
+    bq = board_sub.add_parser("query", help="Query tickets with optional filters")
+    bq.add_argument("--category")
+    bq.add_argument("--tier")
+    bq.add_argument("--status")
+    bq.add_argument("--owner")
+    bq.add_argument("--sort", default="newest")
+
+    bcl = board_sub.add_parser("claim", help="Claim an open ticket -> active")
+    bcl.add_argument("--id", required=True)
+    bcl.add_argument("--from", dest="from_agent", default="unknown")
+
+    bfl = board_sub.add_parser("flag", help="Flag an active ticket as inspection-ready")
+    bfl.add_argument("--id", required=True)
+    bfl.add_argument("--work-done", dest="work_done", required=True)
+    bfl.add_argument("--from", dest="from_agent", default="unknown")
+
+    bfn = board_sub.add_parser("finalize", help="Admin: finalize a ready ticket -> done")
+    bfn.add_argument("--id", required=True)
+    bfn.add_argument("--from", dest="from_agent", default="unknown")
+
+    bdo = board_sub.add_parser("dormant", help="Admin: mark a ticket dormant")
+    bdo.add_argument("--id", required=True)
+    bdo.add_argument("--from", dest="from_agent", default="unknown")
+
+    brv = board_sub.add_parser("revive", help="Admin: revive a dormant ticket -> open")
+    brv.add_argument("--id", required=True)
+    brv.add_argument("--from", dest="from_agent", default="unknown")
+
+    bch = board_sub.add_parser("changelog", help="Query the changelog")
+    bch.add_argument("--query", dest="query_str", default=None)
+
     return parser
 
 
@@ -233,8 +363,92 @@ def _dashboard_dist_dir() -> Path | None:
             return candidate
     return None
 
+
+def _dashboard_source_dir() -> Path | None:
+    """The Angular source tree, if this is a dev checkout (vs a shipped prebuilt deploy)."""
+    repo_root = Path(__file__).resolve().parents[1]
+    src = repo_root / "src" / "dashboard"
+    return src if (src / "package.json").is_file() else None
+
+
+def _newest_mtime(root: Path, exts: tuple[str, ...]) -> float:
+    newest = 0.0
+    if not root.is_dir():
+        return newest
+    for ext in exts:
+        for p in root.rglob(f"*{ext}"):
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                pass
+    return newest
+
+
+def _rebuild_dashboard_if_stale() -> None:
+    """Build-if-stale guard.
+
+    The launcher serves the *prebuilt* Angular ``dist/`` and never recompiles on
+    its own. Without this guard, editing dashboard source then relaunching silently
+    serves the OLD bundle — the mock-compose trap from the 2026-06-27 audit, where a
+    fixed-in-source method kept running its deleted mock because the bundle was stale.
+
+    Rebuilds only when a source tree AND npm are present (a shipped/prebuilt deploy
+    has neither, so it serves ``dist/`` untouched) and the source is newer than the
+    built bundle. Opt out with TETHER_DASHBOARD_NO_BUILD. If a *needed* rebuild fails,
+    it warns loudly that it is serving stale code rather than pretending all is well.
+    """
+    if os.environ.get("TETHER_DASHBOARD_NO_BUILD"):
+        return
+    src_dir = _dashboard_source_dir()
+    if src_dir is None:
+        return  # prebuilt/shipped deploy — nothing to build from
+    import shutil
+    if shutil.which("npm") is None:
+        return  # no toolchain available — serve whatever is present
+
+    src_newest = _newest_mtime(src_dir / "src", (".ts", ".html", ".css", ".scss"))
+    for cfg in ("angular.json", "package.json", "tsconfig.json", "tsconfig.app.json"):
+        p = src_dir / cfg
+        if p.is_file():
+            try:
+                src_newest = max(src_newest, p.stat().st_mtime)
+            except OSError:
+                pass
+    dist_newest = _newest_mtime(src_dir / "dist", (".js",))
+
+    if dist_newest and src_newest <= dist_newest:
+        return  # bundle is fresh — nothing to do
+
+    reason = "no built bundle found" if not dist_newest else "source is newer than the bundle"
+    print(f"Dashboard bundle is stale ({reason}) — rebuilding (npm run build)…", flush=True)
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["npm", "run", "build"],
+            cwd=str(src_dir),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort, but must not hide the staleness
+        print(f"  ⚠  rebuild could not run ({e}) — SERVING STALE BUNDLE.", flush=True)
+        return
+    if result.returncode != 0:
+        tail = "\n".join((result.stdout or "").strip().splitlines()[-8:])
+        print("  ⚠  dashboard rebuild FAILED — SERVING STALE BUNDLE. Last output:", flush=True)
+        if tail:
+            print(tail, flush=True)
+        return
+    print("  ✓  dashboard rebuilt.", flush=True)
+
+
+# Set from an explicit `--db` on the CLI (see main()); honored over $TETHER_DB and the
+# smart default so `--db` is no longer silently ignored by the board/dashboard handlers.
+_CLI_DB_OVERRIDE = None
+
+
 def _dashboard_db_path() -> str:
-    return os.environ.get("TETHER_DB") or _default_db_path()
+    return _CLI_DB_OVERRIDE or os.environ.get("TETHER_DB") or _default_db_path()
 
 
 _DASHBOARD_PORT = DEFAULT_DASHBOARD_PORT
@@ -1464,7 +1678,91 @@ def _create_dashboard_app(dist_dir: Path):
     return app
 
 
+def _run_board_command(args, rt) -> None:
+    """Headless board access — direct SQLite, no dashboard or MCP transport required.
+
+    Mirrors the MCP board_* tool semantics so the bash path and the MCP path are
+    interchangeable. Prints JSON to stdout; on a board-level error prints a clean
+    error object and exits non-zero rather than dumping a traceback.
+    """
+    action = args.board_action
+    try:
+        if action == "propose":
+            handle = rt.board_propose(args.category, args.tier, args.title, args.description, args.from_agent)
+            print(json.dumps({"handle": handle, "status": "proposed"}))
+        elif action == "author":
+            real_id = rt.board_author(
+                args.category, args.tier, args.title, args.description, args.from_agent,
+                batch=args.batch, principle=args.principle, bible_ref=args.bible_ref,
+                gate=args.gate, blocks=args.blocks, blocked_by=args.blocked_by, status=args.status,
+            )
+            print(json.dumps({"id": real_id, "status": args.status}))
+        elif action == "accept":
+            real_id = rt.board_accept(args.id, args.from_agent, args.tier)
+            print(json.dumps({"id": real_id, "status": "accepted"}))
+        elif action == "query":
+            tickets = rt.board_query(
+                category=args.category, tier=args.tier, status=args.status,
+                owner=args.owner, sort=args.sort,
+            )
+            print(json.dumps({"tickets": [dict(t) for t in tickets]}, default=str, indent=2))
+        elif action == "claim":
+            ok = rt.board_claim(args.id, args.from_agent)
+            print(json.dumps({"id": args.id, "claimed": bool(ok)}))
+        elif action == "flag":
+            ok = rt.board_flag(args.id, args.from_agent, args.work_done)
+            print(json.dumps({"id": args.id, "flagged": bool(ok)}))
+        elif action == "finalize":
+            result = rt.board_finalize(args.id, args.from_agent)
+            print(json.dumps({"id": args.id, "result": result}))
+        elif action == "dormant":
+            rt.board_dormant(args.id, args.from_agent)
+            print(json.dumps({"id": args.id, "status": "dormant"}))
+        elif action == "revive":
+            rt.board_revive(args.id, args.from_agent)
+            print(json.dumps({"id": args.id, "status": "open"}))
+        elif action == "changelog":
+            entries = rt.board_changelog_query(args.query_str)
+            print(json.dumps({"changelog": [dict(e) for e in entries]}, default=str, indent=2))
+    except Exception as e:
+        print(json.dumps({"error": type(e).__name__, "message": str(e)}))
+        raise SystemExit(1)
+
+
+def _open_browser_when_ready(host: str, port: int, url: str, timeout: float = 15.0) -> None:
+    """Open the dashboard in a browser only once the server is accepting connections.
+
+    Opening eagerly (before uvicorn binds the port) races the startup work that runs
+    first — autowire, presence, retry — so the browser hits a dead port and shows
+    "Unable to connect" until the user manually refreshes. A daemon thread polls the
+    port and opens the browser the moment it is live; if it never comes up in time it
+    simply skips, rather than dropping the user on an error page.
+    """
+    import threading
+    import time
+
+    def _wait_and_open() -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=0.25):
+                    break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            return  # server never came up in the window — don't open a broken page
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
+
+    threading.Thread(target=_wait_and_open, name="tether-open-browser", daemon=True).start()
+
+
 def _run_dashboard(parser: argparse.ArgumentParser) -> None:
+    # Recompile the Angular bundle if source changed since the last build, so a
+    # launch never silently serves stale dashboard code (see _rebuild_dashboard_if_stale).
+    _rebuild_dashboard_if_stale()
     dist_dir = _dashboard_dist_dir()
     if dist_dir is None:
         print("Tether dashboard is not built yet.")
@@ -1493,11 +1791,10 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
     url = f"http://localhost:{port}"
     app = _create_dashboard_app(dist_dir)
 
-    try:
-        webbrowser.open(url, new=2)
-    except Exception:
-        pass
     print(f"Tether dashboard running at {url} — Ctrl+C to stop", flush=True)
+    # Browser open is deferred to just before uvicorn.run (see _open_browser_when_ready):
+    # opening here would race the autowire/presence/retry startup below and land the
+    # user on "Unable to connect" until they refresh.
 
     # Autowire: refresh stale routing and auto-bind the live Konsole tabs to this
     # dashboard's delivery endpoint, so a launch picks up the running agents with no
@@ -1530,6 +1827,9 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
         pass  # retry loop is an enhancement; never block the server on it
 
     import uvicorn
+
+    # Now that startup is done, open the browser as soon as the port is truly live.
+    _open_browser_when_ready("127.0.0.1", port, url)
 
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
@@ -1564,6 +1864,13 @@ def main():
         return
 
     args = parser.parse_args()
+
+    # An explicit --db overrides env/default for EVERY command (incl. the board and
+    # dashboard handlers, which resolve through _dashboard_db_path()). Without this the
+    # flag was parsed but silently dropped, so a test --db still hit the live DB.
+    if args.db:
+        global _CLI_DB_OVERRIDE
+        _CLI_DB_OVERRIDE = args.db
 
     if not args.command:
         parser.print_help()
@@ -1653,17 +1960,16 @@ def main():
             print("injected." if ok else "injection failed.")
             return
 
-    db_path = args.db
-    if not os.path.exists(db_path) and args.command != "collapse":
-        workspace_db = os.environ.get("TETHER_DB", _default_db_path())
-        if os.path.exists(workspace_db):
-            db_path = workspace_db
+    # Honor an explicit --db verbatim (created if missing); otherwise env or smart default.
+    db_path = _dashboard_db_path()
 
     _ensure_db_parent(db_path)
     rt = SQLiteRuntime(db_path=db_path)
     
     try:
-        if args.command == "collapse":
+        if args.command == "board":
+            _run_board_command(args, rt)
+        elif args.command == "collapse":
             data_str = _read_input(args.file)
             value = json.loads(data_str)
             tags = args.tags.split(",") if args.tags else None
@@ -1737,7 +2043,7 @@ def main():
                         if msg_from:
                             snippet = content.get("text", content.get("content", ""))[:60].replace("\n", " ")
                             print(f"     From: {msg_from} - {snippet}...")
-                except:
+                except Exception:
                     pass
                 print()
 

@@ -232,6 +232,7 @@ Full notes in [changelog/](changelog/).
 
 | Version | Highlights |
 |---------|------------|
+| `v2.1.4` | Bug fixes: atomic self-healing ticket-ID issuance; `--db` honored across all commands; delivery/reap hardening; XDG DB migration; internal runtime split into board/tasks/sqlite mixins |
 | `v2.1` | Native D-Bus multiplexer, Terminals tab, no-tmux delivery, agent registry, presence heartbeat, routes API, real-time feed WebSocket |
 | `v1.8` | TetherLite storage/runtime, relay core, tier enforcement, encrypted envelopes |
 | `v1.7` | Ping daemon, autoping, local delivery tooling |

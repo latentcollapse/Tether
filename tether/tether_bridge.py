@@ -22,8 +22,14 @@ except ImportError:
 
 # Paths
 JOB_BOARD_PATH = "/mnt/d/Language Projects/hlx-workspace/HLX/HLX_JOB_BOARD.toml"
-# Use TETHER_DB env var or default logic
-_default_db = "/mnt/d/Language Projects/Tether/postoffice.db"
+# Use TETHER_DB env var, else the XDG user-data path on the native filesystem.
+# The DB must NOT live on the /mnt/d fuseblk mount: SQLite's fcntl advisory locks are
+# unreliable on FUSE, which caused persistent spurious "database is locked" failures
+# (root-caused + migrated to ~/.local/share/tether 2026-07-03).
+_default_db = os.path.join(
+    os.environ.get("XDG_DATA_HOME", os.path.join(os.path.expanduser("~"), ".local", "share")),
+    "tether", "postoffice.db",
+)
 DB_PATH = os.environ.get("TETHER_DB", _default_db)
 
 class JobBoardHandler(FileSystemEventHandler):

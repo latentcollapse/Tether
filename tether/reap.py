@@ -32,7 +32,6 @@ import time
 REAP_MARKERS = (
     "tether/ping_daemon.py", "tether.ping_daemon",
     "tether.agent_server", "tether/agent_server",
-    "tether.http_server", "tether/http_server",
     "from tether.__main__ import main", "tether.__main__",
     "-m tether ",  # `python -m tether serve` style dashboard launches
 )

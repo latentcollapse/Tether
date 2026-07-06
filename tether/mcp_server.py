@@ -40,8 +40,13 @@ def _candidate_db_paths() -> list[Path]:
     if configured:
         candidates.append(Path(configured).expanduser())
 
+    # XDG postoffice.db is the migrated source of truth (native filesystem) — it MUST come
+    # before the repo-local fallback. The repo/cwd postoffice.db lives on the /mnt/d fuseblk
+    # mount (broken SQLite locks) and, if empty, would shadow the real DB and split the MCP
+    # server off from the CLI. See the 2026-07-03/04 migration split-brain root-cause.
     candidates.extend(
         [
+            xdg_dir / "postoffice.db",
             repo_root / "postoffice.db",
             repo_root / "tether.db",
             xdg_dir / "tether.db",
@@ -99,17 +104,19 @@ def _tmux_inject(session: str, message: str) -> bool:
     try:
         result = subprocess.run(
             ["tmux", "has-session", "-t", session],
-            capture_output=True
+            capture_output=True, timeout=5,
         )
         if result.returncode != 0:
             return False
         subprocess.run(
             ["tmux", "send-keys", "-t", session, message, "Enter"],
-            capture_output=True
+            capture_output=True, timeout=5,
         )
         return True
     except FileNotFoundError:
         return False  # tmux not installed
+    except subprocess.TimeoutExpired:
+        return False  # tmux unresponsive — treat as undeliverable rather than hang
 
 
 async def _fire_ping(url: str, payload: dict):
@@ -1223,4 +1230,28 @@ async def main():
 if __name__ == "__main__":
     import anyio
 
-    anyio.run(main, backend="asyncio")
+    try:
+        anyio.run(main, backend="asyncio")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        # The stdio MCP server died unexpectedly. Its stderr is usually invisible to the
+        # client, so a silent crash looks like "the board/messaging tools just vanished."
+        # Leave a diagnosable record — NEVER on stdout, which is the JSON-RPC channel.
+        import datetime
+        import tempfile
+        import traceback
+
+        report = (
+            f"[{datetime.datetime.now().isoformat()}] tether MCP server crashed:\n"
+            f"{traceback.format_exc()}\n"
+        )
+        try:
+            db_dir = os.path.dirname(os.environ.get("TETHER_DB", "")) or tempfile.gettempdir()
+            with open(os.path.join(db_dir, "tether_mcp_crash.log"), "a") as fh:
+                fh.write(report)
+        except Exception:
+            pass  # logging the crash must never raise on top of the crash
+        sys.stderr.write(report)
+        sys.stderr.flush()
+        raise SystemExit(1)

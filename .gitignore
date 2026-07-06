@@ -10,3 +10,16 @@ build/
 
 tether-website/
 archive/
+
+# Database snapshots / migration + split-brain backups — NEVER publish live message data.
+# (These are named e.g. postoffice.db.premigration-*.bak, which *.db / *.db.bak miss.)
+postoffice.db*
+*.premigration*.bak
+*.splitbrain*.bak
+*.emptyrecreated*.bak
+
+# Generated graph artifacts
+graphify-out/
+
+# Separate venture — lives in its own repo, not part of Tether
+LLM Arena/

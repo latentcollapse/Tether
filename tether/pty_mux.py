@@ -26,6 +26,7 @@ agents launched by the dashboard Connect button.
 import argparse
 import fcntl
 import json
+import logging
 import os
 import pty
 import select
@@ -197,8 +198,10 @@ class PtyMux:
             )
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Surface this — a silent failure here means the agent never registers its wake
+            # endpoint and silently never receives pings.
+            logging.getLogger(__name__).warning("ping endpoint registration failed for %s: %s", self.agent, e)
 
     # ── child + io loop ────────────────────────────────────────────────────────
 

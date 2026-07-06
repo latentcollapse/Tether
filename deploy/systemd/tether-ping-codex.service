@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-Environment="TETHER_DB=/mnt/d/Language Projects/Tether/postoffice.db"
+Environment="TETHER_DB=/home/matt/.local/share/tether/postoffice.db"
 ExecStartPre=/usr/bin/touch /tmp/tether-ping-codex.enabled
 ExecStart=/usr/bin/python3 /mnt/d/Language\x20Projects/Tether/tether/ping_daemon.py --agent codex --port 7704 --delivery-mode tmux
 Restart=always

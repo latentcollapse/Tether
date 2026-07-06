@@ -729,54 +729,79 @@ export class TetherState {
   }
 
   sendMessage(to: string, subject: string, body: string, tagsString: string) {
+    if (typeof window === 'undefined') return;
     const tags = tagsString ? tagsString.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : [];
-    const newMsg: MessageItem = {
-      id: `m_${Date.now()}`,
-      sender: 'terminal-cli',
+
+    // Optimistic local insert so the compose box feels instant. initMessagesFromApi
+    // replaces the whole list on success, so the optimistic entry is reconciled into
+    // the real persisted record (no duplicate).
+    const optimisticId = `m_opt_${Date.now()}`;
+    const optimistic: MessageItem = {
+      id: optimisticId,
+      sender: 'matt',
       subject,
-      preview: body.length > 60 ? body.substr(0, 60) + '...' : body,
+      preview: body.length > 60 ? body.slice(0, 60) + '...' : body,
       body,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       read: true,
       archived: false,
-      tags
+      tags,
     };
+    this.messages.update(msgs => [optimistic, ...msgs]);
 
-    this.messages.update(msgs => [newMsg, ...msgs]);
-
-    // Auto-reply simulation for extreme fidelity!
-    if (this.autonomousMode()) {
-      setTimeout(() => {
-        const reply: MessageItem = {
-          id: `m_${Date.now() + 1}`,
-          sender: to,
-          subject: `Re: ${subject}`,
-          preview: `Message received and processed with handle blake3_a7...`,
-          body: `Handshake confirmed.\nYour payload has been committed to SQLite. Key token verification matches block signature.\n\nReply Ref ID: h&l_resp_${Math.random().toString(16).substr(2, 6)}`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          read: false,
-          archived: false,
-          tags: ['system', 'reply']
-        };
-        this.messages.update(msgs => [reply, ...msgs]);
-      }, 2500);
-    }
+    // Persist through the REAL send path. The backend route triggers the recipient's
+    // autoping; previously this method fabricated a fake "Handshake confirmed" reply
+    // and never hit the server at all (the mock-compose bug from the 2026-06-27 audit).
+    fetch(`${this._apiBase}/api/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, subject, text: body, from: 'matt' }),
+    })
+      .then(r => {
+        if (!r.ok) throw new Error(`send failed: ${r.status}`);
+        return r.json();
+      })
+      .then(() => this.initMessagesFromApi())
+      .catch(e => {
+        // Surface failure instead of silently pretending the message sent.
+        console.error('sendMessage failed to persist', e);
+        this.messages.update(msgs =>
+          msgs.map(m => m.id === optimisticId ? { ...m, subject: `[unsent] ${subject}` } : m)
+        );
+      });
   }
 
   // Job Board & Changelog
-  createTicket(title: string, category: 'core' | 'p2p' | 'crypto' | 'ui' | 'agent', difficulty: 'low' | 'medium' | 'high', tier: 'local' | 'relay' | 'cloud', description: string) {
-    const handle = Math.random().toString(16).substr(2, 6) + '...' + Math.random().toString(16).substr(2, 3);
-    const newTicket: JobTicket = {
-      id: `t_${Date.now()}`,
-      title,
-      handle,
-      category,
-      status: 'open',
-      difficulty,
-      tier,
-      description,
-    };
-    this.tickets.update(ticks => [...ticks, newTicket]);
+  async createTicket(title: string, category: 'core' | 'p2p' | 'crypto' | 'ui' | 'agent', difficulty: 'low' | 'medium' | 'high', tier: 'local' | 'relay' | 'cloud', description: string) {
+    if (typeof window === 'undefined') return;
+    // Persist via the board event-log (propose), then accept (operator is admin) so the
+    // create lands as an OPEN ticket, then refresh from the backend to pick up its real id.
+    // Previously this only pushed to a local signal — tickets were never saved (the UI bug).
+    // Difficulty is preserved in the description until the board model carries it natively.
+    const body = JSON.stringify({
+      category, tier, title,
+      description: `[difficulty: ${difficulty}] ${description}`,
+      from_agent: 'matt',
+    });
+    try {
+      const proposed = await fetch(`${this._apiBase}/api/board/propose`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      });
+      if (!proposed.ok) throw new Error(`propose failed: ${proposed.status}`);
+      const { handle } = await proposed.json();
+      await fetch(`${this._apiBase}/api/board/accept`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: handle, from_agent: 'matt', tier }),
+      });
+      this.initBoardFromApi();   // reload -> real CORE-N id, persisted across restarts
+    } catch (e) {
+      console.error('createTicket failed to persist', e);
+      // Fallback: keep the input visible so the user never loses what they typed.
+      this.tickets.update(ticks => [...ticks, {
+        id: `unsaved_${Date.now()}`, title, handle: 'UNSAVED', category,
+        status: 'open', difficulty, tier, description,
+      } as JobTicket]);
+    }
   }
 
   sendToChangelog(ticketId: string, title: string, problem: string, solution: string) {

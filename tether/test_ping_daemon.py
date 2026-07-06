@@ -104,6 +104,10 @@ def test_inject_when_no_pane_falls_back_to_prompt_file(monkeypatch):
     monkeypatch.setattr(ping_daemon, "is_enabled", lambda agent: True)
     monkeypatch.setattr(ping_daemon, "resolve_pane", lambda agent: "")
     monkeypatch.setattr(ping_daemon.time, "sleep", lambda _: None)
+    # Bound the idle-retry deadline to 0 so the no-pane path exits immediately. Without this
+    # the loop busy-spins for the full IDLE_RETRY_DEADLINE (600s) in real wall-clock time
+    # (sleep is mocked to a noop, so the deadline is the only exit) — the test "hang".
+    monkeypatch.setattr(ping_daemon, "IDLE_RETRY_DEADLINE", 0)
     monkeypatch.setattr(ping_daemon, "desktop_notify", lambda notification: False)
     monkeypatch.setattr(ping_daemon, "write_prompt_fallback", lambda notification: True)
 

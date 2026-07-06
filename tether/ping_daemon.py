@@ -455,15 +455,15 @@ def inject_when_idle(notification: str, agent: str, state: dict) -> None:
             last_inject_pane=pane,
             last_pane_was_idle=True,
         )
-        literal = subprocess.run(["tmux", "send-keys", "-t", pane, "-l", notification], check=False)
+        literal = subprocess.run(["tmux", "send-keys", "-t", pane, "-l", notification], check=False, timeout=5)
         time.sleep(0.5)
-        enter = subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=False)
+        enter = subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=False, timeout=5)
         if literal.returncode == 0 and enter.returncode == 0:
             update_state(state, last_inject_success=True, last_inject_success_at=now_iso(), last_delivery_path="tmux")
             return
         update_state(state, last_inject_success=False)
         deliver_desktop(notification, state, "tmux send-keys failed")
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         update_state(state, last_inject_success=False)
         logger.exception("tmux injection raised")
         deliver_desktop(notification, state, "tmux injection exception")

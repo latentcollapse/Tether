@@ -32,6 +32,7 @@ Usage:
 """
 import argparse
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -285,8 +286,10 @@ def main():
             )
             conn.commit()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        # Surface this — a silent failure here means the agent never registers its wake
+        # endpoint and silently never receives pings ("why didn't my agent get the message").
+        logging.getLogger(__name__).warning("ping endpoint registration failed for %s: %s", args.agent, e)
 
     stop_event = threading.Event()
     hb = threading.Thread(target=_heartbeat_loop, args=(args.agent, port, stop_event), daemon=True)

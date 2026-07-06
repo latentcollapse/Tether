@@ -28,7 +28,7 @@ from pathlib import Path
 DEFAULT_AGENTS = [
     {"id": "claude", "name": "Claude", "cli": "Claude Code", "command": "claude"},
     {"id": "codex", "name": "Codex", "cli": "Codex CLI", "command": "codex"},
-    {"id": "agy", "name": "Agy", "cli": "Antigravity CLI", "command": "antigravity"},
+    {"id": "gemini", "name": "Gemini", "cli": "Antigravity CLI", "command": "antigravity"},
     {"id": "kilo", "name": "Kilo", "cli": "Kilo Code", "command": "kilo"},
     {"id": "hermes", "name": "Hermes", "cli": "Hermes Agent", "command": "hermes"},
     {"id": "pi", "name": "Pi", "cli": "Pi Agent", "command": "pi"},
