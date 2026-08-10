@@ -296,6 +296,20 @@ def prompt_state(service: str, session: str) -> str:
     return "unknown"
 
 
+def agent_accepts_delivery_now(service: str, session: str, agent: str) -> bool:
+    """Whether this TUI can safely *submit* its current empty composer now."""
+    screen = get_displayed_text(service, session)
+    low = screen.lower()
+    # Codex explicitly supports Tab-to-queue during an active turn. Cursor and
+    # Claude do not expose a reliably injectable active-turn submit key through
+    # Konsole D-Bus, so wait for their turn to finish rather than leaving text.
+    if agent == "cursor" and "ctrl+c to stop" in low:
+        return False
+    if agent == "claude" and "esc to interrupt" in low:
+        return False
+    return prompt_state(service, session) == "empty"
+
+
 def inject_tether_notice(
     service: str,
     session: str,
@@ -427,7 +441,9 @@ def current_composer_text(service: str, session: str) -> str | None:
     )
     for raw in lines[marker_index + 1 :]:
         stripped = raw.strip()
-        is_separator = bool(stripped) and set(stripped) <= {"─", "━", "-", "="}
+        is_separator = bool(stripped) and set(stripped) <= {
+            "─", "━", "-", "=", "▄", "▀", "▁", "▔",
+        }
         if (
             not stripped
             or stripped.startswith(_COMPOSER_MARKERS)

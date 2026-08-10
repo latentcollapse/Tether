@@ -107,17 +107,28 @@ def process_once(runtime) -> dict[str, int]:
             stats["missing"] += 1
             continue
         line = notice_line(to_agent=agent, from_agent="", subject="", handle=handle)
-        if konsole_driver.composer_is_tether_owned(
-            target["service"], target["session"], handle
+        service, session = target["service"], target["session"]
+        handle_present = konsole_driver.composer_contains(service, session, handle)
+        ready = konsole_driver.agent_accepts_delivery_now(service, session, agent)
+        if handle_present and not konsole_driver.composer_is_tether_owned(
+            service, session, handle
         ):
+            # The handle exists in mixed or unrecognized composer text. Never
+            # append a duplicate and never submit text we cannot prove we own.
+            stats["waiting"] += 1
+            continue
+        if not ready:
+            stats["waiting"] += 1
+            continue
+        if handle_present:
             ok, state = konsole_driver.submit_owned_tether_notice(
-                target["service"], target["session"], handle,
+                service, session, handle,
                 expected_agent=agent, expected_pid=target.get("pid"),
             )
         else:
             ok, state = konsole_driver.inject_tether_notice(
-                target["service"],
-                target["session"],
+                service,
+                session,
                 line,
                 expected_agent=agent,
                 expected_pid=target.get("pid"),

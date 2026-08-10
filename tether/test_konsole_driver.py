@@ -64,6 +64,29 @@ def test_prompt_state_recognises_current_codex_placeholder(monkeypatch):
     assert _state(monkeypatch, screen) == "empty"
 
 
+def test_active_cursor_waits_for_idle_submission(monkeypatch):
+    screen = "⠘⠆ Editing\n→ Add a follow-up  ctrl+c to stop\n"
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: screen)
+    assert not konsole_driver.agent_accepts_delivery_now("svc", "/Sessions/1", "cursor")
+
+
+def test_active_codex_can_queue_followup(monkeypatch):
+    screen = "• Working · esc to interrupt\n› Run /review on my current changes\n"
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: screen)
+    assert konsole_driver.agent_accepts_delivery_now("svc", "/Sessions/1", "codex")
+
+
+def test_cursor_block_bar_is_not_composer_text(monkeypatch):
+    handle = "h&l_messages_x"
+    screen = (
+        f"→ # [Tether] resolve {handle} --agent cursor\n"
+        "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "Auto · 51%\n"
+    )
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: screen)
+    assert konsole_driver.composer_is_tether_owned("svc", "/Sessions/1", handle)
+
+
 def test_prompt_state_recovers_idle_cursor_after_prior_tether_notice(monkeypatch):
     screen = (
         "output\n"

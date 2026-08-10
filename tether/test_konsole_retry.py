@@ -19,6 +19,7 @@ def test_busy_recipient_receives_zero_bytes(monkeypatch, tmp_path):
         lambda *_: {"service": "svc", "session": "/Sessions/1", "pid": "42"},
     )
     monkeypatch.setattr(konsole_driver, "session_agent_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(konsole_driver, "agent_accepts_delivery_now", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "busy")
     calls = []
     monkeypatch.setattr(konsole_driver, "send_line", lambda *a, **k: calls.append((a, k)) or True)
@@ -38,6 +39,7 @@ def test_idle_recipient_gets_one_atomic_inert_line(monkeypatch, tmp_path):
         lambda *_: {"service": "svc", "session": "/Sessions/1", "pid": "42"},
     )
     monkeypatch.setattr(konsole_driver, "session_agent_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(konsole_driver, "agent_accepts_delivery_now", lambda *_: True)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "empty")
     monkeypatch.setattr(konsole_driver.time, "sleep", lambda *_: None)
     calls = []
@@ -69,6 +71,8 @@ def test_tick_attempts_only_oldest_handle_per_recipient(monkeypatch, tmp_path):
         lambda _runtime, agent: {"service": "svc", "session": agent, "pid": "42"},
     )
     observed = []
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
+    monkeypatch.setattr(konsole_driver, "agent_accepts_delivery_now", lambda *_: True)
     monkeypatch.setattr(
         konsole_driver, "inject_tether_notice",
         lambda _s, session, line, **_k: observed.append((session, line)) or (False, "busy"),
@@ -91,6 +95,26 @@ def test_kill_switch_prevents_target_resolution_and_writes(monkeypatch, tmp_path
     )
     try:
         assert process_once(runtime) == {"delivered": 0, "waiting": 0, "missing": 0}
+    finally:
+        runtime.close()
+
+
+def test_existing_unowned_handle_is_never_duplicated(monkeypatch, tmp_path):
+    runtime = _runtime(tmp_path)
+    _queue(runtime, "h&l_messages_mixed", "cursor")
+    monkeypatch.setattr(
+        "tether.delivery._live_konsole_target",
+        lambda *_: {"service": "svc", "session": "/Sessions/1", "pid": "42"},
+    )
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: True)
+    monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: False)
+    monkeypatch.setattr(konsole_driver, "agent_accepts_delivery_now", lambda *_: True)
+    monkeypatch.setattr(
+        konsole_driver, "inject_tether_notice",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not duplicate")),
+    )
+    try:
+        assert process_once(runtime)["waiting"] == 1
     finally:
         runtime.close()
 
