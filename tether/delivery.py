@@ -226,7 +226,11 @@ def deliver_to_konsole(
     # Nonempty/unknown prompts receive bytes but never Enter.  Confirm current
     # composer ownership separately from generic transcript visibility.
     held = state in {"draft", "busy", "unknown"}
-    status = "delivered" if in_composer else "notified"
+    # A confirmed held composer is notified, not delivered: it has not been
+    # submitted or read yet and its pending row remains eligible for the safe
+    # follow-up path.  Keeping the API state aligned with the scheduler state
+    # prevents a caller from seeing "delivered" while a retry is still pending.
+    status = "notified"
     outcome = _persist(
         runtime,
         DeliveryOutcome(

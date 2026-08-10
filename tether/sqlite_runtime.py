@@ -252,11 +252,28 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
             "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_handle "
             "ON tether_delivery_attempts(handle, agent, attempted_at)"
         )
+        # Older direct sends called a notice "delivered" as soon as its text
+        # was confirmed in a held composer, even though the scheduler correctly
+        # kept it pending until submission or read receipt.  Make the durable
+        # outcome agree with the queue: held/unsubmitted work is only notified.
+        self._conn.execute("""
+            UPDATE tether_deliveries
+            SET status='notified', updated_at=datetime('now')
+            WHERE status='delivered' AND submitted=0
+              AND EXISTS (
+                  SELECT 1 FROM tether_konsole_pending AS pending
+                  WHERE pending.handle=tether_deliveries.handle
+                    AND pending.agent=tether_deliveries.agent
+                    AND pending.status='pending'
+              )
+        """)
         self._conn.commit()
 
 
     def _migrate_konsole_pending(self) -> None:
         """Serialize the v2.1 delivery migration across concurrent runtimes."""
+        from .delivery import notice_line
+
         # Dashboard requests, retry workers, and direct sends can all construct a
         # runtime simultaneously.  Take the writer lock before inspecting schema;
         # otherwise two stale PRAGMA results can both attempt the table rebuild.
@@ -310,6 +327,44 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
                 SET status='target_changed', attempts=max_attempts,
                     next_attempt_at=NULL, updated_at=datetime('now')
                 WHERE status='pending' AND target_pid IS NULL
+            """)
+            # Prompt text is durable data, so the sender-independent invariant
+            # must cover rows written by older binaries too.  Rebuild every
+            # stored line from validated routing metadata; never preserve or
+            # replay the legacy sender/subject-derived text.
+            for row in self._conn.execute(
+                "SELECT handle, agent, line FROM tether_konsole_pending"
+            ).fetchall():
+                try:
+                    safe_line = notice_line(
+                        to_agent=row["agent"],
+                        from_agent="",
+                        subject="",
+                        handle=row["handle"],
+                    )
+                except ValueError:
+                    safe_line = "# [Tether] legacy notification retired"
+                    self._conn.execute("""
+                        UPDATE tether_konsole_pending
+                        SET status='target_changed', attempts=max_attempts,
+                            next_attempt_at=NULL, updated_at=datetime('now')
+                        WHERE handle=? AND agent=?
+                    """, (row["handle"], row["agent"]))
+                if row["line"] != safe_line:
+                    self._conn.execute("""
+                        UPDATE tether_konsole_pending
+                        SET line=?, updated_at=datetime('now')
+                        WHERE handle=? AND agent=?
+                    """, (safe_line, row["handle"], row["agent"]))
+            # A terminal row is exhausted by definition.  Normalize old rows
+            # so future code cannot accidentally infer eligibility from a stale
+            # attempts counter even though the schedule is already null.
+            self._conn.execute("""
+                UPDATE tether_konsole_pending
+                SET attempts=max_attempts, next_attempt_at=NULL,
+                    updated_at=datetime('now')
+                WHERE status<>'pending'
+                  AND (attempts<>max_attempts OR next_attempt_at IS NOT NULL)
             """)
             self._conn.commit()
         except Exception:

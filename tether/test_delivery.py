@@ -56,10 +56,12 @@ def test_human_draft_lands_but_never_autosubmits(monkeypatch, tmp_path):
             handle="h&l_messages_draft",
             settle_seconds=0,
         )
-        assert outcome.status == "delivered"
+        assert outcome.status == "notified"
         assert outcome.held is True
         assert outcome.submitted is False
         assert outcome.confirmed is True
+        pending = runtime.konsole_pending_get(outcome.handle, "cursor")
+        assert pending["status"] == "pending"
         assert spawned and spawned[0]["handle"] == outcome.handle
     finally:
         runtime.close()
