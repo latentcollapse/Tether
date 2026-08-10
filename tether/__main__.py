@@ -105,12 +105,17 @@ def _send_message_with_ping(
     )
 
 
-def _build_parser():
+def _build_parser(*, show_internal: bool = False):
     parser = argparse.ArgumentParser(
-        description="Tether CLI - LLM-to-LLM messaging & organization",
+        description="Tether - durable agent messaging",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--db", default=None, help="Database path (default: $TETHER_DB, else the XDG user-data DB). An explicit path is honored verbatim and created if missing.")
+    parser.add_argument(
+        "--help-all",
+        action="store_true",
+        help="Show compatibility, operator, and diagnostic commands",
+    )
     
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
@@ -123,7 +128,7 @@ def _build_parser():
     collapse_parser.add_argument("--ttl", type=int, help="TTL in seconds")
 
     # send command
-    send_parser = subparsers.add_parser("send", help="Send a message and trigger recipient autoping")
+    send_parser = subparsers.add_parser("send", help="Send one durable tmail")
     send_parser.add_argument("to", help="Recipient agent name")
     send_parser.add_argument("subject", help="Message subject")
     send_parser.add_argument("text", help="Message body")
@@ -133,7 +138,7 @@ def _build_parser():
     send_parser.add_argument("--ticket-id", help="Optional ticket ID")
     
     # resolve command
-    resolve_parser = subparsers.add_parser("resolve", help="Resolve handle to value")
+    resolve_parser = subparsers.add_parser("resolve", help="Read a handle and acknowledge delivery")
     resolve_parser.add_argument("handle", help="Handle to resolve")
     resolve_parser.add_argument("--agent", help="Mark as read for this agent")
     resolve_parser.add_argument("--pretty", "-p", action="store_true", default=True, help="Pretty print JSON")
@@ -145,18 +150,22 @@ def _build_parser():
     metadata_parser.add_argument("--agent", help="Check read status for this agent")
     
     # inbox command
-    inbox_parser = subparsers.add_parser("inbox", help="List handles in a table (organized view)")
+    inbox_parser = subparsers.add_parser("inbox", help="List durable messages")
     inbox_parser.add_argument("table", nargs="?", default="messages", help="Table name")
     inbox_parser.add_argument("--agent", default="human", help="Agent name for read status (default: human)")
     inbox_parser.add_argument("--tag", help="Filter by tag")
     inbox_parser.add_argument("--limit", type=int, default=20, help="Max handles to show")
 
-    # Operator-only kill switch. Delivery remains queued while paused.
+    # Delivery control is core: operators need one obvious, safe kill switch.
     delivery_parser = subparsers.add_parser(
-        "delivery", help=argparse.SUPPRESS
+        "delivery", help="Pause, resume, or inspect delivery"
     )
     delivery_parser.add_argument("delivery_action", choices=("pause", "resume", "status"))
     delivery_parser.add_argument("--reason")
+
+    # The dashboard is deliberately opt-in. Bare `tether` prints the small messaging
+    # surface instead of silently starting a frontend and server.
+    subparsers.add_parser("dashboard", help="Open the optional local dashboard")
     
     # tables command
     subparsers.add_parser("tables", help="List all tables")
@@ -270,6 +279,13 @@ def _build_parser():
 
     bch = board_sub.add_parser("changelog", help="Query the changelog")
     bch.add_argument("--query", dest="query_str", default=None)
+
+    if not show_internal:
+        visible = {"send", "resolve", "inbox", "delivery", "dashboard"}
+        subparsers._choices_actions = [
+            action for action in subparsers._choices_actions if action.dest in visible
+        ]
+        subparsers.metavar = "{send,resolve,inbox,delivery,dashboard}"
 
     return parser
 
@@ -1765,12 +1781,17 @@ def main():
         
     sys.argv = new_argv + db_args + other_args
 
-    parser = _build_parser()
+    show_internal = "--help-all" in sys.argv[1:]
+    parser = _build_parser(show_internal=show_internal)
     if len(sys.argv) == 1:
-        _run_dashboard(parser)
+        parser.print_help()
         return
 
     args = parser.parse_args()
+
+    if args.help_all:
+        parser.print_help()
+        return
 
     # An explicit --db overrides env/default for EVERY command (incl. the board and
     # dashboard handlers, which resolve through _dashboard_db_path()). Without this the
@@ -1781,6 +1802,10 @@ def main():
 
     if not args.command:
         parser.print_help()
+        return
+
+    if args.command == "dashboard":
+        _run_dashboard(parser)
         return
 
     # reap is process-level (no runtime needed) — handle before touching the DB.
