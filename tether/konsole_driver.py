@@ -159,6 +159,143 @@ def send_line(service: str, session: str, text: str, submit: bool = True) -> boo
     return True
 
 
+def prompt_state(service: str, session: str) -> str:
+    """Classify the visible agent input as ``empty``, ``draft``, ``busy``, or ``unknown``.
+
+    Konsole exposes text but not an input-buffer API.  The three supported agent
+    TUIs do expose stable empty-prompt placeholders, though.  We only auto-submit
+    a Tether wake when we can positively identify one of those placeholders.  An
+    unrecognised screen is deliberately treated as ``unknown``: the notice is
+    inserted but never submitted, which protects anything Matt is already typing.
+
+    This is a transport policy, not message acknowledgement.  The message itself
+    remains durable in SQLite and the recipient must resolve its handle to ACK it.
+    """
+    screen = get_displayed_text(service, session)
+    if not screen:
+        return "unknown"
+
+    # Cursor keeps an "Add a follow-up" composer visible while it is generating.
+    # That looks empty, but Enter creates a queued follow-up rather than waking
+    # the currently running turn.  Treat the live activity indicator as an
+    # explicit fourth state so the retry loop can wait for a real idle composer.
+    # Only inspect the viewport tail: prior turn output may contain old status
+    # words and must not suppress a genuinely idle prompt.
+    recent = screen.splitlines()[-24:]
+    activity = re.compile(
+        r"(?:^|\s)(?:Running|Working|Reading|Thinking|Editing|Grepping|"
+        r"Searching|Planning|Building|Testing|Compacting)(?:\s|$)"
+    )
+    active_footer = re.compile(r"(?:esc to interrupt|←\s*\d+\s+agents?\b)", re.IGNORECASE)
+    if any(activity.search(raw) or active_footer.search(raw) for raw in recent):
+        return "busy"
+
+    # Work from the bottom: terminal output can contain old prompts above the
+    # current one.  Strip only terminal padding; do not collapse the actual draft.
+    for raw in reversed(screen.splitlines()[-80:]):
+        line = raw.strip()
+        if not line:
+            continue
+
+        # Cursor Agent: an empty composer is rendered as this placeholder.  A
+        # visible follow-up draft replaces the placeholder after the arrow.
+        if line.startswith("→"):
+            suffix = line[1:].strip()
+            suffix = re.sub(r"\s+ctrl\+[a-z].*$", "", suffix, flags=re.IGNORECASE).strip()
+            # Cursor 1.8 can render an idle composer as a bare arrow while its
+            # follow-up notice and status footer occupy the following lines.
+            # That is an empty input buffer and is safe to submit.  Restrict
+            # recognition to a line *starting* with the composer marker: arrow
+            # glyphs also occur in old transcript text such as CORE-33→CORE-34.
+            if suffix == "":
+                return "empty"
+            if suffix == "Add a follow-up":
+                return "empty"
+            # A prior delivery can be left in Cursor's composer when an
+            # earlier screen classification was conservative.  It is not a
+            # Matt-authored draft: the durable notice has a fixed prefix, so
+            # the next delivery may safely submit the accumulated notices and
+            # wake the idle agent.  Do not use a loose "Tether" match here;
+            # a human may legitimately type that word into a real draft.
+            if suffix.startswith("[Tether] New message from "):
+                return "empty"
+            if suffix:
+                return "draft"
+
+        # Codex CLI's empty composer has a stable placeholder.  Its user text
+        # appears after the same leading glyph.
+        if line.startswith("›"):
+            suffix = line[1:].strip()
+            if suffix == "Find and fix a bug in @filename":
+                return "empty"
+            if suffix:
+                return "draft"
+
+        # Claude Code shows a bare ❯ when the prompt is empty.  It also renders
+        # placeholder hints after the same glyph that are NOT a Matt-authored
+        # draft: "Press up to edit queued messages" appears whenever text was
+        # injected while a turn was running.  Reading those as a draft is what
+        # made Claude Code deliveries type-but-never-submit — the notice lands,
+        # is classified as human typing, and is protected forever.  Treat the
+        # known placeholders as an empty composer; anything else is a real draft.
+        if line.startswith("❯"):
+            # NBSP separates the glyph from Claude Code's placeholder text.
+            suffix = line[1:].replace("\xa0", " ").strip()
+            if not suffix:
+                return "empty"
+            low = suffix.lower()
+            if low.startswith("press up to edit queued message"):
+                return "empty"
+            if low.startswith("try \"") or low.startswith("ask claude"):
+                return "empty"
+            if suffix.startswith("[Tether] New message from "):
+                return "empty"
+            if suffix.startswith("[Tether from "):
+                return "empty"
+            return "draft"
+
+        # Pi coding agent: prompt line begins with > or shows openrouter model bar
+        if line.startswith(">") or "openrouter/" in line or "Ask it how to use or extend Pi" in line:
+            suffix = line[1:].strip() if line.startswith(">") else line.strip()
+            if not suffix or "openrouter/" in line or "Ask it" in line:
+                return "empty"
+            return "draft"
+
+        # Kilo coding agent: shows Kilo Gateway or ctrl+p commands at bottom
+        if "Kilo Gateway" in line or "ctrl+p commands" in line or "esc interrupt" in line:
+            return "empty"
+
+    return "unknown"
+
+
+def inject_tether_notice(service: str, session: str, text: str) -> tuple[bool, str]:
+    """Inject a Tether notice without clobbering a human-authored draft.
+
+    Empty, recognised prompts receive a normal submitted instruction so an idle
+    agent wakes and can retrieve the durable handle.  A non-empty or unknown
+    prompt receives the same text with no Enter, leaving Matt's current draft in
+    control.  The caller gets both the D-Bus result and the observed state for
+    diagnostics and tests.
+    """
+    state = prompt_state(service, session)
+    # Never combine notice bytes and Enter in one optimistic operation.  Even
+    # after an empty observation, Matt can begin typing before qdbus runs.  Put
+    # down the notice first, then prove that the current composer contains only
+    # that exact text before sending Enter.
+    ok = send_line(service, session, text, submit=False)
+    if not ok or state != "empty":
+        return ok, state
+    time.sleep(0.12)
+    composer = current_composer_text(service, session)
+    normalize = lambda value: " ".join((value or "").split())
+    if normalize(composer) != normalize(text):
+        # D-Bus accepted the bytes, but ownership is not proven.  Treat the
+        # result conservatively so every caller holds/retries instead of firing.
+        observed = prompt_state(service, session)
+        return True, observed if observed != "empty" else "unknown"
+    return send_line(service, session, "\r", submit=False), "empty"
+
+
 def set_title(service: str, session: str, title: str) -> bool:
     """Stamp a tab title with an agent id (role 1 = session/displayed title)."""
     return _qdbus(service, session, "org.kde.konsole.Session.setTitle", "1", title) is not None
@@ -172,6 +309,88 @@ def get_displayed_text(service: str, session: str, timeout: float = 5.0) -> str:
     of the viewport, so this sees it. Returns "" if the read fails."""
     out = _qdbus(service, session, "org.kde.konsole.Session.getAllDisplayedText", "true", timeout=timeout)
     return out or ""
+
+
+_COMPOSER_MARKERS = ("→", "›", "❯", ">")
+
+
+def current_composer_text(service: str, session: str) -> str | None:
+    """Return text owned by the *current* visible prompt, if recognizable.
+
+    This is deliberately narrower than :func:`screen_contains`.  A handle in
+    prior transcript output proves only that it was once painted; it does not
+    prove that Tether owns the current input buffer and therefore must never be
+    used as permission to press Enter.
+    """
+    screen = get_displayed_text(service, session)
+    if not screen:
+        return None
+    lines = screen.splitlines()[-100:]
+    marker_index = None
+    first = ""
+    for index in range(len(lines) - 1, -1, -1):
+        stripped = lines[index].strip()
+        if stripped.startswith(_COMPOSER_MARKERS):
+            marker_index = index
+            first = stripped[1:].replace("\xa0", " ").strip()
+            break
+    if marker_index is None:
+        return None
+
+    # A wrapped composer begins on the marker line.  Only collect continuation
+    # text when that line already contains input; a bare marker followed by a
+    # Tether-looking transcript/status line is not sufficient proof of input
+    # ownership.
+    if not first:
+        return ""
+    pieces = [first]
+    footer = re.compile(
+        r"^(?:Auto\b|Working\b|Running\b|Thinking\b|Reading\b|Editing\b|"
+        r"Grepping\b|Searching\b|Planning\b|Building\b|Testing\b|Compacting\b|"
+        r"\d+\s+(?:task|agent|background terminal)\b|"
+        r".*(?:bypass permissions|shift\+tab to cycle|esc to interrupt|\? for shortcuts).*)",
+        re.IGNORECASE,
+    )
+    for raw in lines[marker_index + 1 :]:
+        stripped = raw.strip()
+        is_separator = bool(stripped) and set(stripped) <= {"─", "━", "-", "="}
+        if (
+            not stripped
+            or stripped.startswith(_COMPOSER_MARKERS)
+            or is_separator
+            or footer.search(stripped)
+        ):
+            break
+        pieces.append(stripped)
+    return " ".join(pieces)
+
+
+def composer_contains(service: str, session: str, needle: str) -> bool:
+    """Whether ``needle`` belongs to the current prompt input buffer."""
+    if not needle:
+        return False
+    composer = current_composer_text(service, session)
+    return composer is not None and needle in composer
+
+
+def composer_is_tether_owned(service: str, session: str, handle: str) -> bool:
+    """True only when the current prompt consists of a Tether notice.
+
+    A notice appended after Matt's own draft still contains the handle, but its
+    composer starts with human text and is therefore never auto-submitted.
+    """
+    composer = current_composer_text(service, session)
+    if not composer or handle not in composer:
+        return False
+    # Full-match the executable receipt.  Merely starting with Tether is not
+    # enough: a user may type after a held notice, and that mixed composer must
+    # remain under human control.
+    pattern = (
+        r"^\[Tether\] New message from .+ — run `tether resolve '"
+        + re.escape(handle)
+        + r"' --agent [^`]+`$"
+    )
+    return re.fullmatch(pattern, " ".join(composer.split())) is not None
 
 
 def screen_contains(service: str, session: str, needle: str) -> bool:

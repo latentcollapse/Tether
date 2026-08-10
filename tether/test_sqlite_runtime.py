@@ -19,6 +19,7 @@ def rt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SQLiteRuntime:
     """A fresh runtime on a throwaway DB. The fresh DB exercises the construct-time
     schema init (incl. the smart-board tables) — a virgin DB must be fully usable."""
     monkeypatch.setenv("TETHER_KVFOLD_DIR", str(tmp_path / "kvfold"))
+    monkeypatch.setattr(SQLiteRuntime, "_fire_ping_sync", lambda *_args, **_kwargs: None)
     return SQLiteRuntime(db_path=str(tmp_path / "tether.db"))
 
 
@@ -144,6 +145,21 @@ def test_ping_url_set_get_and_toggle(rt: SQLiteRuntime) -> None:
     rt.set_ping_enabled("codex", False)
     # disabled endpoint should not be handed out as a live ping target
     assert rt.get_ping_url("codex") is None
+
+
+def test_konsole_pending_defer_preserves_initial_attempt(rt: SQLiteRuntime) -> None:
+    rt.konsole_pending_add("h&l_messages_defer", "cursor", "notice", interval_seconds=90)
+    before = rt._conn.execute(
+        "SELECT attempts, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
+        ("h&l_messages_defer", "cursor"),
+    ).fetchone()
+    rt.konsole_pending_defer("h&l_messages_defer", "cursor", interval_seconds=0)
+    after = rt._conn.execute(
+        "SELECT attempts, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
+        ("h&l_messages_defer", "cursor"),
+    ).fetchone()
+    assert before["attempts"] == after["attempts"] == 1
+    assert after["status"] == "pending"
 
 
 # ── tasks ────────────────────────────────────────────────────────────────────

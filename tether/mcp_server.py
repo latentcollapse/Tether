@@ -9,7 +9,6 @@ import sqlite3
 import subprocess
 import sys
 import tomllib
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -119,43 +118,25 @@ def _tmux_inject(session: str, message: str) -> bool:
         return False  # tmux unresponsive — treat as undeliverable rather than hang
 
 
-async def _fire_ping(url: str, payload: dict):
-    """Notify an agent of a new message.
+async def _fire_ping(url: str | None, payload: dict):
+    """Compatibility adapter for older internal callers.
 
-    Strategy (in order):
-    1. HTTP POST to daemon (preferred — daemon has idle detection, only injects when agent is ready)
-    2. tmux send-keys into the agent's named session (fallback — no idle detection, fires immediately)
-
-    Both are best-effort — never fail the send.
+    The URL argument is retained for API stability; the authoritative engine
+    obtains and validates the recipient endpoint from SQLite itself.
     """
-    agent = payload.get("to", "")
-    sender = payload.get("from", "?")
-    subject = payload.get("subject", "?")
-    prompt = f"[tether] new message from {sender}: {subject} — check inbox"
+    from tether.delivery import notify_message
 
-    try:
-        loop = asyncio.get_running_loop()
-        handle = payload.get("handle", "")
-
-        # Always write notify file — shell prompt picks this up on next render
-        await loop.run_in_executor(None, lambda: _write_notify(handle, sender, subject))
-
-        # 1. HTTP daemon (preferred — idle-aware injection)
-        pinged = False
-        if url:
-            try:
-                data = json.dumps(payload).encode()
-                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-                await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
-                pinged = True
-            except Exception:
-                pass
-
-        # 2. tmux fallback — only when no daemon responded
-        if not pinged:
-            await loop.run_in_executor(None, lambda: _tmux_inject(agent, prompt))
-    except Exception:
-        pass  # ping is best-effort — never fail the send
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: notify_message(
+            runtime,
+            to_agent=str(payload.get("to") or ""),
+            from_agent=str(payload.get("from") or "unknown"),
+            subject=str(payload.get("subject") or ""),
+            handle=str(payload.get("handle") or ""),
+        ).to_dict(),
+    )
 
 
 @server.list_tools()
@@ -265,13 +246,17 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="tether_resolve",
-            description="Resolve a Tether handle back to its original JSON value.",
+            description="Resolve a Tether handle and optionally record the recipient read receipt.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {
                         "type": "string",
                         "description": "Tether handle to resolve (e.g., '&h_messages_abc123')"
+                    },
+                    "for_agent": {
+                        "type": "string",
+                        "description": "Recipient identity; records the durable read receipt"
                     }
                 },
                 "required": ["handle"]
@@ -750,6 +735,11 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
+    # A process-level identity pin wins over model-supplied sender names. This
+    # prevents a session from accidentally sending as a different agent.
+    pinned_agent = os.environ.get("TETHER_AGENT_ID")
+    if pinned_agent and "from_agent" in arguments:
+        arguments = {**arguments, "from_agent": pinned_agent}
     try:
         if name == "tether_generate_keypair":
             public_key, private_key = generate_keypair()
@@ -803,7 +793,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )]
         
         elif name == "tether_resolve":
-            value = runtime.resolve(arguments["handle"])
+            recipient = arguments.get("for_agent") or os.environ.get("TETHER_AGENT_ID")
+            value = runtime.resolve(arguments["handle"], for_agent=recipient)
             return [TextContent(
                 type="text",
                 text=json.dumps(value, indent=2)
@@ -831,34 +822,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )]
         
         elif name == "tether_send":
-            message_data = {
-                "from": arguments.get("from_agent", "kilo"),
-                "to": arguments["to"],
-                "subject": arguments["subject"],
-                "text": arguments["text"],
-            }
+            from tether.delivery import send_message
+
             ttl_seconds = arguments.get("ttl_seconds")
-            handle = runtime.collapse(
-                "messages",
-                message_data,
-                ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
-                owner=arguments["to"],
+            result = send_message(
+                runtime,
+                to_agent=arguments["to"],
+                subject=arguments["subject"],
+                text=arguments["text"],
+                from_agent=arguments.get("from_agent", "unknown"),
                 tags=arguments.get("tags"),
-                sender=arguments.get("from_agent"),
-                ticket_id=arguments.get("ticket_id")
+                ttl_seconds=int(ttl_seconds) if ttl_seconds is not None else None,
+                ticket_id=arguments.get("ticket_id"),
             )
-            result = {"handle": handle, "status": "sent", "to": arguments["to"], "subject": arguments["subject"]}
-            if ttl_seconds is not None:
-                result["ttl_seconds"] = int(ttl_seconds)
-            ping_url = runtime.get_ping_url(arguments["to"])
-            if ping_url:
-                asyncio.create_task(_fire_ping(ping_url, {
-                    "event": "tether_message",
-                    "to": arguments["to"],
-                    "from": arguments.get("from_agent", "unknown"),
-                    "subject": arguments["subject"],
-                    "handle": handle,
-                }))
             return [TextContent(type="text", text=json.dumps(result))]
 
         elif name == "tether_inbox":
@@ -912,7 +888,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }))]
 
         elif name == "tether_receive":
-            msg = runtime.resolve(arguments["handle"], for_agent=arguments.get("for_agent"))
+            recipient = arguments.get("for_agent") or os.environ.get("TETHER_AGENT_ID")
+            msg = runtime.resolve(arguments["handle"], for_agent=recipient)
             body = msg.pop("text", "") if isinstance(msg, dict) else ""
             result = [TextContent(type="text", text=json.dumps({"handle": arguments["handle"], "message": msg}, indent=2))]
             if body:
@@ -943,7 +920,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "thread": arguments["thread"],
             }
             handle = runtime.collapse(arguments["thread"], message_data)
-            return [TextContent(type="text", text=json.dumps({"handle": handle, "status": "sent", "thread": arguments["thread"], "to": arguments["to"]}))]
+            from tether.delivery import notify_message
+
+            outcome = notify_message(
+                runtime,
+                to_agent=arguments["to"],
+                from_agent=arguments.get("from_agent", "unknown"),
+                subject=arguments["subject"],
+                handle=handle,
+            ).to_dict()
+            outcome["thread"] = arguments["thread"]
+            return [TextContent(type="text", text=json.dumps(outcome))]
 
         elif name == "tether_thread_inbox":
             snapshot = runtime.snapshot(arguments["thread"])

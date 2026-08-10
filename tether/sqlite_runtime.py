@@ -214,6 +214,42 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
                 PRIMARY KEY (handle, agent)
             )
         """)
+        # End-to-end notification state.  A message row proves durability; it
+        # does not prove that a live recipient was notified or that text landed
+        # in its prompt.  Keep those facts separate and queryable so every send
+        # surface reports the same typed outcome instead of the old ambiguous
+        # ``sent`` success.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_deliveries (
+                handle          TEXT NOT NULL,
+                agent           TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                mechanism       TEXT NOT NULL,
+                prompt_state    TEXT,
+                submitted       INTEGER NOT NULL DEFAULT 0,
+                confirmed       INTEGER NOT NULL DEFAULT 0,
+                held            INTEGER NOT NULL DEFAULT 0,
+                detail          TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (handle, agent)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_delivery_attempts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                handle          TEXT NOT NULL,
+                agent           TEXT NOT NULL,
+                mechanism       TEXT NOT NULL,
+                outcome         TEXT NOT NULL,
+                detail          TEXT,
+                attempted_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_handle "
+            "ON tether_delivery_attempts(handle, agent, attempted_at)"
+        )
         self._conn.commit()
 
 
@@ -669,6 +705,35 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def konsole_pending_get(self, handle: str, agent: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, "
+            "next_attempt_at, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
+            (handle, agent),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def konsole_pending_defer(self, handle: str, agent: str, interval_seconds: int) -> None:
+        """Keep an already-injected delivery pending without counting a retry.
+
+        A direct Konsole wake has placed the exact notice into Cursor's
+        follow-up UI, but a busy prompt cannot safely receive Enter.  That is
+        not a second delivery attempt: it must simply become due soon enough
+        for the detached exact-handle waiter to submit it after idle.  Keeping
+        this operation distinct from ``konsole_pending_mark_attempt`` preserves
+        the retry budget for actual re-injections.
+        """
+        if interval_seconds < 0:
+            raise ValueError("interval_seconds must be non-negative")
+        now = datetime.now(timezone.utc)
+        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
+        self._conn.execute(
+            "UPDATE tether_konsole_pending SET next_attempt_at=?, status='pending', updated_at=? "
+            "WHERE handle=? AND agent=?",
+            (next_at, now.isoformat(), handle, agent),
+        )
+        self._conn.commit()
+
     def konsole_pending_mark_attempt(self, handle: str, agent: str, interval_seconds: int) -> None:
         """Record a re-injection: bump attempts, schedule the next nudge."""
         now = datetime.now(timezone.utc)
@@ -687,6 +752,100 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
             (status, datetime.now(timezone.utc).isoformat(), handle, agent),
         )
         self._conn.commit()
+
+    # ── Typed end-to-end delivery outcomes ──────────────────────────────────
+
+    def delivery_record(
+        self,
+        handle: str,
+        agent: str,
+        status: str,
+        mechanism: str,
+        *,
+        prompt_state: str | None = None,
+        submitted: bool = False,
+        confirmed: bool = False,
+        held: bool = False,
+        detail: str | None = None,
+    ) -> dict:
+        """Persist the latest notification outcome for one durable message.
+
+        ``status`` is intentionally small and transport-independent:
+        ``queued``, ``notified``, ``delivered``, or ``undeliverable``.
+        The boolean fields retain the distinctions needed by callers without
+        inventing a different status vocabulary for every adapter.
+        """
+        allowed = {"queued", "notified", "delivered", "undeliverable"}
+        if status not in allowed:
+            raise ValueError(f"invalid delivery status: {status}")
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO tether_deliveries "
+            "(handle, agent, status, mechanism, prompt_state, submitted, confirmed, held, detail, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(handle, agent) DO UPDATE SET "
+            "status=excluded.status, mechanism=excluded.mechanism, prompt_state=excluded.prompt_state, "
+            "submitted=excluded.submitted, confirmed=excluded.confirmed, held=excluded.held, "
+            "detail=excluded.detail, updated_at=excluded.updated_at",
+            (
+                handle,
+                agent,
+                status,
+                mechanism,
+                prompt_state,
+                int(submitted),
+                int(confirmed),
+                int(held),
+                detail,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.delivery_status(handle, agent) or {}
+
+    def delivery_attempt(
+        self,
+        handle: str,
+        agent: str,
+        mechanism: str,
+        outcome: str,
+        detail: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO tether_delivery_attempts "
+            "(handle, agent, mechanism, outcome, detail, attempted_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                handle,
+                agent,
+                mechanism,
+                outcome,
+                detail,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def delivery_status(self, handle: str, agent: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT handle, agent, status, mechanism, prompt_state, submitted, confirmed, held, "
+            "detail, created_at, updated_at FROM tether_deliveries WHERE handle=? AND agent=?",
+            (handle, agent),
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        for field in ("submitted", "confirmed", "held"):
+            result[field] = bool(result[field])
+        return result
+
+    def delivery_attempts(self, handle: str, agent: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT mechanism, outcome, detail, attempted_at FROM tether_delivery_attempts "
+            "WHERE handle=? AND agent=? ORDER BY id",
+            (handle, agent),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # ── Smart Board (v2.0) ────────────────────────────────────────────────────
 
@@ -730,34 +889,29 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         )
 
     def _fire_ping_sync(self, agent: str, sender: str, subject: str, handle: str = ""):
-        url = self.get_ping_url(agent)
-        if not url:
-            return
-            
-        import urllib.request
-        import threading
-        payload = {
-            "from": sender,
-            "to": agent,
-            "subject": subject,
-            "handle": handle
-        }
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
+        """Route board notifications through the same truthful prompt engine."""
+        from tether.delivery import notify_message
+
+        if not handle:
+            handle = self.collapse(
+                "messages",
+                {
+                    "from": sender,
+                    "to": agent,
+                    "subject": subject,
+                    "text": subject,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                owner=agent,
+                sender=sender,
             )
-            def run_req():
-                try:
-                    with urllib.request.urlopen(req, timeout=2) as response:
-                        response.read()
-                except Exception:
-                    pass
-            threading.Thread(target=run_req, daemon=True).start()
-        except Exception:
-            pass
+        return notify_message(
+            self,
+            to_agent=agent,
+            from_agent=sender,
+            subject=subject,
+            handle=handle,
+        ).to_dict()
 
     # ── End Ping Endpoints ────────────────────────────────────────────────────
 

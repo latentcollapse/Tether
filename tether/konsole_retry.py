@@ -59,27 +59,95 @@ def process_due(rt) -> dict:
     (e.g. a broken transport), not the primary stop mechanism.
     """
     from tether import konsole_driver
+    from tether.delivery import _live_konsole_target
+
     stats = {"acked": 0, "delivered": 0, "unbound": 0, "reinjected": 0, "exhausted": 0}
     for row in rt.konsole_pending_due():
         handle, agent = row["handle"], row["agent"]
 
         if rt.is_read(handle, agent):
-            rt.konsole_pending_resolve(handle, agent, "acked"); stats["acked"] += 1; continue
+            rt.konsole_pending_resolve(handle, agent, "acked")
+            rt.delivery_record(handle, agent, "delivered", "read_receipt", confirmed=True)
+            stats["acked"] += 1
+            continue
 
-        binding = rt.konsole_binding(agent)
-        if not binding:
-            rt.konsole_pending_resolve(handle, agent, "unbound"); stats["unbound"] += 1; continue
-        svc, sess = binding["service"], binding["session"]
+        target = _live_konsole_target(rt, agent)
+        if not target:
+            # A closed/restarted tab is temporary, not a terminal delivery
+            # result.  Keep the durable notice eligible for a future live tab.
+            rt.konsole_pending_defer(handle, agent, row["interval_seconds"])
+            rt.delivery_record(
+                handle, agent, "queued", "database", detail="recipient has no live Konsole target"
+            )
+            stats["unbound"] += 1
+            continue
+        svc, sess = target["service"], target["session"]
 
-        # Did a prior inject already land and is still visible? Then it delivered — stop.
-        if konsole_driver.screen_contains(svc, sess, handle):
-            rt.konsole_pending_resolve(handle, agent, "delivered"); stats["delivered"] += 1; continue
+        # Enter is authorized only by the current composer being wholly owned
+        # by this exact Tether notice.  Visibility in transcript or a status
+        # panel is never enough.
+        if konsole_driver.composer_contains(svc, sess, handle):
+            state = konsole_driver.prompt_state(svc, sess)
+            if state != "empty" or not konsole_driver.composer_is_tether_owned(svc, sess, handle):
+                rt.delivery_record(
+                    handle,
+                    agent,
+                    "delivered",
+                    "konsole",
+                    prompt_state=state,
+                    confirmed=True,
+                    held=True,
+                    detail="notice held in current prompt; no automatic Enter",
+                )
+                rt.konsole_pending_defer(handle, agent, row["interval_seconds"])
+                continue
+            submitted = konsole_driver.send_line(svc, sess, "\r", submit=False)
+            time.sleep(SETTLE_SECONDS)
+            # An empty prompt turning nonempty/busy is the only safe indication
+            # that the TUI accepted the queued Tether follow-up.  If it remains
+            # empty we leave it pending rather than duplicate or force it.
+            if submitted and konsole_driver.prompt_state(svc, sess) != "empty":
+                rt.konsole_pending_resolve(handle, agent, "delivered")
+                rt.delivery_record(
+                    handle, agent, "delivered", "konsole", prompt_state="empty",
+                    submitted=True, confirmed=True,
+                )
+                stats["delivered"] += 1
+            else:
+                rt.konsole_pending_defer(handle, agent, row["interval_seconds"])
+            continue
 
-        # Not visible → re-inject, let it settle, and confirm it landed this time.
-        konsole_driver.send_line(svc, sess, row["line"])
+        # A stale copy elsewhere in the viewport grants no special treatment.
+        # If the real composer is empty, a normal prompt-safe reinjection is the
+        # correct recovery; if it is busy/draft/unknown, inject_tether_notice
+        # holds without Enter.
+        _, state = konsole_driver.inject_tether_notice(svc, sess, row["line"])
         time.sleep(SETTLE_SECONDS)
-        if konsole_driver.screen_contains(svc, sess, handle):
-            rt.konsole_pending_resolve(handle, agent, "delivered"); stats["delivered"] += 1; continue
+        if state == "empty":
+            rt.konsole_pending_resolve(handle, agent, "delivered")
+            rt.delivery_record(
+                handle, agent, "delivered", "konsole", prompt_state=state,
+                submitted=True, confirmed=konsole_driver.screen_contains(svc, sess, handle),
+            )
+            stats["delivered"] += 1
+            continue
+
+        # The agent was busy, a human draft was present, or the transport did
+        # not land the line.  Retain the durable handle and retry after the
+        # normal interval; neither case is a transport failure.
+        if state in {"busy", "draft", "unknown"}:
+            confirmed = konsole_driver.composer_contains(svc, sess, handle)
+            rt.delivery_record(
+                handle,
+                agent,
+                "delivered" if confirmed else "notified",
+                "konsole",
+                prompt_state=state,
+                confirmed=confirmed,
+                held=True,
+            )
+            rt.konsole_pending_defer(handle, agent, row["interval_seconds"])
+            continue
 
         # Still didn't land — count an attempt; give up only at the safety backstop.
         rt.konsole_pending_mark_attempt(handle, agent, row["interval_seconds"])

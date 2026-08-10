@@ -7,7 +7,6 @@ import os
 import socket
 import sqlite3
 import sys
-import urllib.request
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,47 +60,24 @@ def _ensure_db_parent(db_path: str) -> None:
     parent.mkdir(parents=True, exist_ok=True)
 
 
-def _konsole_wake(*, to_agent: str, from_agent: str, subject: str, handle: str) -> bool:
-    """Best-effort DIRECT Konsole D-Bus injection to wake a live agent pane.
+def _konsole_wake(*, to_agent: str, from_agent: str, subject: str, handle: str, db_path: str | None = None) -> bool:
+    """Compatibility wrapper around the authoritative delivery engine."""
+    if not db_path:
+        return False
+    from tether.delivery import deliver_to_konsole
 
-    The normal ping route (get_ping_url -> the dashboard's /api/konsole/deliver endpoint)
-    only injects when the DASHBOARD is running. With the dashboard/MCP down there is no
-    ping endpoint, so a plain `tether send` used to reach only the DB inbox and the passive
-    ~/.tether_notify file — the recipient's pane never woke (root cause of "the PSA didn't
-    hit their prompt boxes", 2026-07-05). This fallback resolves the recipient's live
-    Konsole session itself and injects the wake, so `tether send` wakes a konsole-hosted
-    agent on its own. Uses LIVE session discovery (not the bindings table, which goes stale
-    after restarts — the recurring delivery bug). Never raises; returns True only on a real
-    inject so the caller knows whether to still drop the passive notify file.
-    """
-    if not to_agent or to_agent == from_agent:
-        return False
+    runtime = SQLiteRuntime(db_path=db_path)
     try:
-        from tether import konsole_driver
-    except Exception:
-        return False
-    if not konsole_driver.available():
-        return False
-    try:
-        from tether.agent_config import load_agents
-        registry = load_agents()
-    except Exception:
-        registry = []
-    try:
-        target = None
-        for s in konsole_driver.list_sessions():
-            if s.get("ambiguous"):
-                continue  # tmux-nested tab hides the real agent — not directly targetable
-            if konsole_driver.guess_agent(s, registry) == to_agent:
-                target = s
-                break
-        if target is None:
-            return False  # recipient not a live konsole agent — inbox delivery still stands
-        line = (f"[Tether] New message from {from_agent}: {subject} "
-                f"— run `tether inbox --agent {to_agent}` (handle {handle})")
-        return bool(konsole_driver.send_line(target["service"], target["session"], line, submit=True))
-    except Exception:
-        return False
+        outcome = deliver_to_konsole(
+            runtime,
+            to_agent=to_agent,
+            from_agent=from_agent,
+            subject=subject,
+            handle=handle,
+        )
+        return outcome.status in {"notified", "delivered"}
+    finally:
+        runtime.close()
 
 
 def _send_message_with_ping(
@@ -114,64 +90,19 @@ def _send_message_with_ping(
     tags: list[str] | None = None,
     ttl_seconds: int | None = None,
     ticket_id: str | None = None,
-) -> str:
-    value = {
-        "from": from_agent,
-        "to": to_agent,
-        "subject": subject,
-        "text": text,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    handle = runtime.collapse(
-        "messages",
-        value,
-        ttl_seconds=ttl_seconds,
-        owner=to_agent,
+) -> dict:
+    from tether.delivery import send_message
+
+    return send_message(
+        runtime,
+        to_agent=to_agent,
+        subject=subject,
+        text=text,
+        from_agent=from_agent,
         tags=tags,
-        sender=from_agent,
+        ttl_seconds=ttl_seconds,
         ticket_id=ticket_id,
     )
-    # Delivery ladder, each rung a fallback for the one above:
-    #  1. HTTP ping -> dashboard's konsole_deliver (ACK/retry) — best, needs the dashboard up.
-    #  2. DIRECT Konsole injection — wakes the pane with NO dashboard (the gap we just closed).
-    #  3. Passive ~/.tether_notify — rendered on the recipient's next prompt (last resort).
-    delivered = False
-    ping_url = runtime.get_ping_url(to_agent)
-    if ping_url:
-        payload = json.dumps({
-            "event": "tether_message",
-            "to": to_agent,
-            "from": from_agent,
-            "subject": subject,
-            "handle": handle,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            ping_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=2):
-                pass
-            delivered = True
-        except Exception:
-            # HTTP blocked / dashboard down — fall through to direct injection.
-            pass
-    if not delivered:
-        delivered = _konsole_wake(
-            to_agent=to_agent, from_agent=from_agent, subject=subject, handle=handle
-        )
-    if not delivered:
-        # Neither route reached a live pane — leave a passive breadcrumb the recipient's
-        # PROMPT_COMMAND picks up on its next render.
-        try:
-            notify_path = os.path.join(os.path.expanduser("~"), ".tether_notify")
-            with open(notify_path, "w", encoding="utf-8") as f:
-                f.write(f"[Tether] From agent: {from_agent}  Handle: '{handle}'\n")
-        except Exception:
-            pass
-    return handle
 
 
 def _build_parser():
@@ -766,7 +697,7 @@ def _create_dashboard_app(dist_dir: Path):
         ticket_id = str(payload.get("ticketId") or "").strip() or None
         runtime = SQLiteRuntime(db_path=_dashboard_db_path())
         try:
-            handle = _send_message_with_ping(
+            outcome = _send_message_with_ping(
                 runtime,
                 to_agent=to_agent,
                 subject=subject,
@@ -777,7 +708,7 @@ def _create_dashboard_app(dist_dir: Path):
             )
         finally:
             runtime.close()
-        return {"handle": handle}
+        return outcome
 
     _GHOST_AGENTS = {"unknown", "test_bridge", "dashboard"}
 
@@ -1424,50 +1355,28 @@ def _create_dashboard_app(dist_dir: Path):
 
     @app.post("/api/konsole/deliver")
     def konsole_deliver(agent: str, payload: dict):
-        """Ping target for konsole-bound agents: resolve handle, type into the tab."""
-        from tether import konsole_driver
+        """Live receiver using the same prompt-safe path as CLI and MCP."""
+        from tether.delivery import deliver_to_konsole
+
         rt = SQLiteRuntime(db_path=_dashboard_db_path())
         try:
-            binding = rt.konsole_binding(agent)
+            handle = str(payload.get("handle") or "")
+            if not handle:
+                raise HTTPException(status_code=400, detail="handle is required")
+            outcome = deliver_to_konsole(
+                rt,
+                to_agent=agent,
+                from_agent=str(payload.get("from") or "unknown"),
+                subject=str(payload.get("subject") or ""),
+                handle=handle,
+                spawn_followup=True,
+            )
+            result = outcome.to_dict()
+            result["ok"] = outcome.status in {"notified", "delivered"}
+            result["injected"] = outcome.mechanism == "konsole" and result["ok"]
+            return result
         finally:
             rt.close()
-        if not binding:
-            raise HTTPException(status_code=404, detail=f"no konsole binding for {agent}")
-        handle = str(payload.get("handle") or "")
-        sender = str(payload.get("from") or "unknown")
-        subject = str(payload.get("subject") or "")
-        # Always inject a short handle + tag, never the full body. Long bodies chunk
-        # at Konsole's ~1KB boundary and get paste-bucketed by the agent TUI, which
-        # swallows the submit Enter. The handle IS the message (content-addressed) —
-        # the agent (full-auto) resolves it via tether_receive and acts. Uniform, no
-        # length guesswork, always under the chunk boundary, always submits.
-        if handle:
-            subj = subject[:80] + "..." if len(subject) > 80 else subject
-            tail = f" re: {subj}" if subj else ""
-            line = f'[Tether from {sender}]{tail} -- run tether_receive handle="{handle}" then follow it'
-        else:
-            text = " ".join(str(payload.get("text") or "").split())
-            line = (f"[Tether from {sender}] {text}")[:400] if text else f"[Tether from {sender}] new message"
-        ok = konsole_driver.send_line(binding["service"], binding["session"], line)
-        # Confirm-on-inject: the inject is fire-and-forget and can lose a redraw race, so
-        # verify it actually landed by reading the tab's screen back for the handle. If it
-        # is there, delivery succeeded — resolve immediately, no retry needed even if the
-        # agent can't ACK (down / rate-limited / mid-task). If it did NOT land, register it
-        # for the retry loop, which re-injects and re-confirms. Only handle-bearing messages
-        # are tracked (the handle is the unique on-screen marker we look for).
-        delivered = False
-        if handle:
-            import time as _time
-            _time.sleep(0.6)  # let the TUI echo the injected line before reading it back
-            delivered = konsole_driver.screen_contains(binding["service"], binding["session"], handle)
-            rt2 = SQLiteRuntime(db_path=_dashboard_db_path())
-            try:
-                rt2.konsole_pending_add(handle, agent, line)
-                if delivered:
-                    rt2.konsole_pending_resolve(handle, agent, "delivered")
-            finally:
-                rt2.close()
-        return {"ok": ok, "agent": agent, "injected": ok, "delivered": delivered}
 
     @app.get("/api/discover")
     def discover_agents():
@@ -1978,7 +1887,7 @@ def main():
 
         elif args.command == "send":
             tags = args.tags.split(",") if args.tags else None
-            handle = _send_message_with_ping(
+            outcome = _send_message_with_ping(
                 rt,
                 to_agent=args.to,
                 subject=args.subject,
@@ -1988,7 +1897,7 @@ def main():
                 ttl_seconds=args.ttl,
                 ticket_id=args.ticket_id,
             )
-            print(handle)
+            print(json.dumps(outcome, sort_keys=True))
 
         elif args.command == "resolve":
             value = rt.resolve(args.handle, for_agent=args.agent)

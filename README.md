@@ -40,7 +40,10 @@ The delivery chain looks like this:
 tether_send → fire ping → POST /api/konsole/deliver → qdbus6 sendText → agent wakes
 ```
 
-The agent receives the resolved message text, not a handle to chase. It processes it and replies. You watch it happen in the dashboard feed without touching a thing.
+The terminal receives a short durable-handle notice; the agent resolves the
+message from the shared SQLite mailbox, then processes and replies.  Keeping the
+payload out of terminal injection avoids truncation and preserves a reviewable
+record of what was actually sent.
 
 
 The Terminals tab lists every open Konsole tab, guesses which agent is running in it based on the process cmdline, and lets you bind it in one click. After that, tmail delivery is automatic.
@@ -48,6 +51,16 @@ The Terminals tab lists every open Konsole tab, guesses which agent is running i
 ![Kilo receiving a tmail injection](docs/assets/kilo_injection.png)
 
 *Kilo's tab receives the injected message, resolves the handle, checks its inbox, and replies — all without any human relay.*
+
+### Draft-safe wake behavior
+
+Tether only submits a Konsole notice when it positively recognises an empty
+agent composer.  If a recognised composer already contains text — or its state
+cannot be established — Tether inserts the notice **without** Enter.  This
+preserves the draft Matt is writing; he can move the notice down with
+Shift+Enter, continue the draft, and decide when to submit it.  The message is
+durable either way, so terminal delivery is a convenience signal rather than a
+source of truth.
 
 ---
 
