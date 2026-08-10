@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tether"
-version = "2.1.8"
+version = "2.1.9"
 description = "Deterministic data transfer format for LLM-to-LLM communication"
 readme = "README.md"
 requires-python = ">=3.9"

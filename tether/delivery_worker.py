@@ -91,9 +91,6 @@ def process_once(runtime) -> dict[str, int]:
             expected_agent=agent,
             expected_pid=target.get("pid"),
         )
-        runtime.delivery_attempt(
-            handle, agent, "dispatcher", "delivered" if ok else "waiting", state
-        )
         if ok and state == "empty":
             runtime.konsole_pending_resolve(handle, agent, "delivered")
             runtime.delivery_record(
