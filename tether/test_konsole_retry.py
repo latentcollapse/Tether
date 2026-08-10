@@ -29,7 +29,10 @@ class _Runtime:
 def _live_target(monkeypatch):
     monkeypatch.setattr(
         "tether.delivery._live_konsole_target",
-        lambda _runtime, _agent: {"service": "svc", "session": "/Sessions/1"},
+        lambda _runtime, _agent: {"service": "svc", "session": "/Sessions/1", "pid": "42"},
+    )
+    monkeypatch.setattr(
+        konsole_driver, "session_agent_is_live", lambda *_args, **_kwargs: True
     )
 
 
@@ -80,7 +83,7 @@ def test_old_transcript_handle_never_authorizes_bare_enter(monkeypatch):
     _live_target(monkeypatch)
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "screen_contains", lambda *_: True)
-    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_: (True, "empty"))
+    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_args, **_kwargs: (True, "empty"))
     monkeypatch.setattr(
         konsole_driver,
         "send_line",
@@ -89,3 +92,29 @@ def test_old_transcript_handle_never_authorizes_bare_enter(monkeypatch):
     monkeypatch.setattr(konsole_retry.time, "sleep", lambda _seconds: None)
     konsole_retry.process_due(runtime)
     assert runtime.resolved == [("h&l_messages_abc", "cursor", "delivered")]
+
+
+def test_restarted_agent_process_never_receives_old_delivery(monkeypatch):
+    runtime = _Runtime()
+    monkeypatch.setattr(
+        runtime,
+        "konsole_pending_due",
+        lambda: [{
+            "handle": "h&l_messages_abc", "agent": "cursor", "line": "notice",
+            "interval_seconds": 30, "attempts": 1, "max_attempts": 3,
+            "target_pid": "41",
+        }],
+    )
+    monkeypatch.setattr(
+        "tether.delivery._live_konsole_target",
+        lambda _runtime, _agent: {"service": "svc", "session": "/Sessions/1", "pid": "42"},
+    )
+    monkeypatch.setattr(
+        konsole_driver,
+        "inject_tether_notice",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("replacement process must receive no bytes")
+        ),
+    )
+    konsole_retry.process_due(runtime)
+    assert runtime.resolved == [("h&l_messages_abc", "cursor", "target_changed")]

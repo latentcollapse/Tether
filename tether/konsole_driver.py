@@ -111,28 +111,21 @@ def list_sessions() -> list[dict]:
     return sessions
 
 
-def guess_agent(session: dict, registry: list[dict]) -> str | None:
-    """Best-guess which registered agent a tab is running.
+def process_agent(session: dict, registry: list[dict]) -> str | None:
+    """Identify an agent from the tab's *live foreground process* only.
 
-    Matches on WHOLE TOKENS, never loose substrings. A short agent id like "pi"
-    must NOT match an unrelated command such as `pipx install ...` — that mis-match
-    bound innocent tabs and (via title stamping) created self-reinforcing phantom
-    nodes. Tokenization splits on path separators and non-alphanumerics so the agent
-    id / command basename has to appear as its own word to count.
+    Konsole titles and persisted bindings are routing hints, not identity.  A tab
+    survives when an agent crashes and its shell resumes, so accepting a stamped
+    title here turns a stale tab into an arbitrary-input target.  Matches use whole
+    process tokens and registered executable names only.
     """
     proc = (session.get("proc") or "").lower()
-    title = (session.get("title") or "").lower()
     cmdline = (session.get("cmdline") or "").lower()
-    title_tokens = set(re.findall(r"[a-z0-9_-]+", title))
     cmd_tokens = set(re.findall(r"[a-z0-9_-]+", cmdline))
     cmd_parts = cmdline.split()
     cmd_exe = os.path.basename(cmd_parts[0]) if cmd_parts else ""
 
-    # 1. Title stamped with the agent id as a whole word (strongest — we set it).
-    for a in registry:
-        if a["id"].lower() in title_tokens:
-            return a["id"]
-    # 2. The executable actually being run IS the agent's command (exact basename).
+    # The executable actually being run IS the registered command.
     for a in registry:
         cmd = (a.get("command") or "").strip()
         if not cmd:
@@ -140,12 +133,50 @@ def guess_agent(session: dict, registry: list[dict]) -> str | None:
         base = os.path.basename(cmd.split()[0]).lower()
         if base and (base == proc or base == cmd_exe):
             return a["id"]
-    # 3. Agent id appears as a whole token in the command line (e.g. node .../codex/cli.js)
+    # Node/python launchers expose the agent as a whole command-line token/path.
     for a in registry:
+        if not (a.get("command") or "").strip():
+            continue
         aid = a["id"].lower()
         if aid == proc or aid == cmd_exe or aid in cmd_tokens:
             return a["id"]
     return None
+
+
+def guess_agent(session: dict, registry: list[dict]) -> str | None:
+    """Compatibility alias for strict live-process identification."""
+    return process_agent(session, registry)
+
+
+def session_agent_is_live(
+    service: str,
+    session: str,
+    agent: str,
+    *,
+    expected_pid: str | int | None = None,
+    registry: list[dict] | None = None,
+) -> bool:
+    """Re-read Konsole and prove that this exact tab still runs ``agent``.
+
+    This check belongs immediately before every D-Bus write.  A prior binding,
+    title, prompt shape, or successful check earlier in a delivery is not proof:
+    the foreground process can exit between any two observations.
+    """
+    if not agent:
+        return False
+    if registry is None:
+        from tether.agent_config import load_agents
+
+        registry = load_agents()
+    for live in list_sessions():
+        if live.get("service") != service or live.get("session") != session:
+            continue
+        if live.get("ambiguous") or process_agent(live, registry) != agent:
+            return False
+        if expected_pid is not None and str(live.get("pid") or "") != str(expected_pid):
+            return False
+        return True
+    return False
 
 
 def send_line(service: str, session: str, text: str, submit: bool = True) -> bool:
@@ -219,6 +250,8 @@ def prompt_state(service: str, session: str) -> str:
             # a human may legitimately type that word into a real draft.
             if suffix.startswith("[Tether] New message from "):
                 return "empty"
+            if suffix.startswith("# [Tether] resolve "):
+                return "empty"
             if suffix:
                 return "draft"
 
@@ -252,6 +285,8 @@ def prompt_state(service: str, session: str) -> str:
                 return "empty"
             if suffix.startswith("[Tether from "):
                 return "empty"
+            if suffix.startswith("# [Tether] resolve "):
+                return "empty"
             return "draft"
 
         # Pi coding agent: prompt line begins with > or shows openrouter model bar
@@ -268,7 +303,14 @@ def prompt_state(service: str, session: str) -> str:
     return "unknown"
 
 
-def inject_tether_notice(service: str, session: str, text: str) -> tuple[bool, str]:
+def inject_tether_notice(
+    service: str,
+    session: str,
+    text: str,
+    *,
+    expected_agent: str,
+    expected_pid: str | int | None = None,
+) -> tuple[bool, str]:
     """Inject a Tether notice without clobbering a human-authored draft.
 
     Empty, recognised prompts receive a normal submitted instruction so an idle
@@ -277,11 +319,19 @@ def inject_tether_notice(service: str, session: str, text: str) -> tuple[bool, s
     control.  The caller gets both the D-Bus result and the observed state for
     diagnostics and tests.
     """
+    if not session_agent_is_live(
+        service, session, expected_agent, expected_pid=expected_pid
+    ):
+        return False, "wrong_target"
     state = prompt_state(service, session)
     # Never combine notice bytes and Enter in one optimistic operation.  Even
     # after an empty observation, Matt can begin typing before qdbus runs.  Put
     # down the notice first, then prove that the current composer contains only
     # that exact text before sending Enter.
+    if not session_agent_is_live(
+        service, session, expected_agent, expected_pid=expected_pid
+    ):
+        return False, "wrong_target"
     ok = send_line(service, session, text, submit=False)
     if not ok or state != "empty":
         return ok, state
@@ -293,6 +343,10 @@ def inject_tether_notice(service: str, session: str, text: str) -> tuple[bool, s
         # result conservatively so every caller holds/retries instead of firing.
         observed = prompt_state(service, session)
         return True, observed if observed != "empty" else "unknown"
+    if not session_agent_is_live(
+        service, session, expected_agent, expected_pid=expected_pid
+    ):
+        return True, "target_changed"
     return send_line(service, session, "\r", submit=False), "empty"
 
 
@@ -382,14 +436,10 @@ def composer_is_tether_owned(service: str, session: str, handle: str) -> bool:
     composer = current_composer_text(service, session)
     if not composer or handle not in composer:
         return False
-    # Full-match the executable receipt.  Merely starting with Tether is not
+    # Full-match the inert wake.  Merely mentioning Tether is not
     # enough: a user may type after a held notice, and that mixed composer must
     # remain under human control.
-    pattern = (
-        r"^\[Tether\] New message from .+ — run `tether resolve '"
-        + re.escape(handle)
-        + r"' --agent [^`]+`$"
-    )
+    pattern = r"^# \[Tether\] resolve " + re.escape(handle) + r" --agent [A-Za-z0-9_-]+$"
     return re.fullmatch(pattern, " ".join(composer.split())) is not None
 
 

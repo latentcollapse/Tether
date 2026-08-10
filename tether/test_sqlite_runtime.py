@@ -8,6 +8,8 @@ regression and these tests catch it.
 """
 
 from pathlib import Path
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -148,7 +150,9 @@ def test_ping_url_set_get_and_toggle(rt: SQLiteRuntime) -> None:
 
 
 def test_konsole_pending_defer_preserves_initial_attempt(rt: SQLiteRuntime) -> None:
-    rt.konsole_pending_add("h&l_messages_defer", "cursor", "notice", interval_seconds=90)
+    rt.konsole_pending_add(
+        "h&l_messages_defer", "cursor", "notice", interval_seconds=90, target_pid=42
+    )
     before = rt._conn.execute(
         "SELECT attempts, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
         ("h&l_messages_defer", "cursor"),
@@ -160,6 +164,55 @@ def test_konsole_pending_defer_preserves_initial_attempt(rt: SQLiteRuntime) -> N
     ).fetchone()
     assert before["attempts"] == after["attempts"] == 1
     assert after["status"] == "pending"
+
+
+def test_konsole_terminal_delivery_has_no_retry_schedule(rt: SQLiteRuntime) -> None:
+    handle = "h&l_messages_terminal"
+    rt.konsole_pending_add(handle, "cursor", "notice", interval_seconds=0, target_pid=42)
+    assert rt.konsole_pending_due()[0]["target_pid"] == "42"
+    rt.konsole_pending_resolve(handle, "cursor", "delivered")
+    row = rt.konsole_pending_get(handle, "cursor")
+    assert row["status"] == "delivered"
+    assert row["next_attempt_at"] is None
+    assert row["attempts"] == row["max_attempts"]
+    assert rt.konsole_pending_due() == []
+
+
+def test_legacy_pending_migration_is_concurrency_safe(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "legacy.db")
+    connection = sqlite3.connect(db_path)
+    connection.execute("""
+        CREATE TABLE tether_konsole_pending (
+            handle TEXT NOT NULL, agent TEXT NOT NULL, line TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 8,
+            interval_seconds INTEGER NOT NULL DEFAULT 20, next_attempt_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY (handle, agent)
+        )
+    """)
+    connection.execute(
+        "INSERT INTO tether_konsole_pending VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("h&l_messages_legacy", "cursor", "old", 1, 3, 30,
+         "2026-08-08T00:00:00+00:00", "pending", "now", "now"),
+    )
+    connection.commit()
+    connection.close()
+
+    def open_and_close(_index: int) -> None:
+        runtime = SQLiteRuntime(db_path=db_path)
+        runtime.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(open_and_close, range(2)))
+
+    runtime = SQLiteRuntime(db_path=db_path)
+    try:
+        row = runtime.konsole_pending_get("h&l_messages_legacy", "cursor")
+        assert row["status"] == "target_changed"
+        assert row["next_attempt_at"] is None
+        assert runtime.konsole_pending_due() == []
+    finally:
+        runtime.close()
 
 
 # ── tasks ────────────────────────────────────────────────────────────────────

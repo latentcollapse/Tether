@@ -82,6 +82,21 @@ def process_due(rt) -> dict:
             stats["unbound"] += 1
             continue
         svc, sess = target["service"], target["session"]
+        original_pid = row.get("target_pid")
+        if original_pid and str(target.get("pid") or "") != str(original_pid):
+            # The recipient process died or restarted.  Never deliver an old
+            # prompt write into a replacement process; the durable inbox is the
+            # recovery path for this message.
+            rt.konsole_pending_resolve(handle, agent, "target_changed")
+            rt.delivery_record(
+                handle,
+                agent,
+                "queued",
+                "database",
+                detail="original recipient process exited; automatic injection stopped",
+            )
+            stats["unbound"] += 1
+            continue
 
         # Enter is authorized only by the current composer being wholly owned
         # by this exact Tether notice.  Visibility in transcript or a status
@@ -100,6 +115,12 @@ def process_due(rt) -> dict:
                     detail="notice held in current prompt; no automatic Enter",
                 )
                 rt.konsole_pending_defer(handle, agent, row["interval_seconds"])
+                continue
+            if not konsole_driver.session_agent_is_live(
+                svc, sess, agent, expected_pid=original_pid
+            ):
+                rt.konsole_pending_resolve(handle, agent, "target_changed")
+                stats["unbound"] += 1
                 continue
             submitted = konsole_driver.send_line(svc, sess, "\r", submit=False)
             time.sleep(SETTLE_SECONDS)
@@ -121,7 +142,13 @@ def process_due(rt) -> dict:
         # If the real composer is empty, a normal prompt-safe reinjection is the
         # correct recovery; if it is busy/draft/unknown, inject_tether_notice
         # holds without Enter.
-        _, state = konsole_driver.inject_tether_notice(svc, sess, row["line"])
+        _, state = konsole_driver.inject_tether_notice(
+            svc,
+            sess,
+            row["line"],
+            expected_agent=agent,
+            expected_pid=original_pid,
+        )
         time.sleep(SETTLE_SECONDS)
         if state == "empty":
             rt.konsole_pending_resolve(handle, agent, "delivered")

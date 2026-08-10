@@ -12,11 +12,11 @@ def _stub_target(monkeypatch, *, state: str) -> None:
     monkeypatch.setattr(
         konsole_driver,
         "list_sessions",
-        lambda: [{"service": "svc", "session": "/Sessions/1", "ambiguous": False}],
+        lambda: [{"service": "svc", "session": "/Sessions/1", "ambiguous": False, "pid": "42"}],
     )
-    monkeypatch.setattr(agent_config, "load_agents", lambda: [{"id": "cursor"}])
-    monkeypatch.setattr(konsole_driver, "guess_agent", lambda *_: "cursor")
-    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_: (True, state))
+    monkeypatch.setattr(agent_config, "load_agents", lambda: [{"id": "cursor", "command": "agent"}])
+    monkeypatch.setattr(konsole_driver, "process_agent", lambda *_: "cursor")
+    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_args, **_kwargs: (True, state))
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: state == "draft")
     monkeypatch.setattr(konsole_driver, "screen_contains", lambda *_: True)
 
@@ -50,6 +50,7 @@ def test_busy_direct_wake_persists_exact_handle_and_spawns_waiter(monkeypatch, t
             "handle": "h&l_messages_busy",
             "agent": "cursor",
             "db_path": db_path,
+            "target_pid": "42",
         }
     ]
 
@@ -83,13 +84,13 @@ def test_direct_wake_notice_resolves_with_recipient_identity(monkeypatch, tmp_pa
     monkeypatch.setattr(
         konsole_driver,
         "list_sessions",
-        lambda: [{"service": "svc", "session": "/Sessions/1", "ambiguous": False}],
+        lambda: [{"service": "svc", "session": "/Sessions/1", "ambiguous": False, "pid": "42"}],
     )
-    monkeypatch.setattr(agent_config, "load_agents", lambda: [{"id": "cursor"}])
-    monkeypatch.setattr(konsole_driver, "guess_agent", lambda *_: "cursor")
+    monkeypatch.setattr(agent_config, "load_agents", lambda: [{"id": "cursor", "command": "agent"}])
+    monkeypatch.setattr(konsole_driver, "process_agent", lambda *_: "cursor")
     notices: list[str] = []
 
-    def inject(_service, _session, line):
+    def inject(_service, _session, line, **_kwargs):
         notices.append(line)
         return True, "empty"
 
@@ -105,6 +106,5 @@ def test_direct_wake_notice_resolves_with_recipient_identity(monkeypatch, tmp_pa
         db_path=str(tmp_path / "postoffice.db"),
     )
     assert notices == [
-        "[Tether] New message from codex: tree review "
-        "— run `tether resolve 'h&l_messages_receipt' --agent cursor`"
+        "# [Tether] resolve h&l_messages_receipt --agent cursor"
     ]

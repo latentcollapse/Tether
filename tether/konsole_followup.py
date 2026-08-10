@@ -28,15 +28,20 @@ def record_result(*, db_path: str, agent: str, handle: str, result: str) -> None
 
     runtime = SQLiteRuntime(db_path=db_path)
     try:
-        if result in {"submitted", "acknowledged"}:
-            runtime.konsole_pending_resolve(handle, agent, "delivered")
+        if result in {"submitted", "acknowledged", "target_changed"}:
+            terminal_status = "target_changed" if result == "target_changed" else "delivered"
+            runtime.konsole_pending_resolve(handle, agent, terminal_status)
             runtime.delivery_record(
                 handle,
                 agent,
-                "delivered",
+                "queued" if result == "target_changed" else "delivered",
                 "read_receipt" if result == "acknowledged" else "konsole",
                 submitted=result == "submitted",
-                confirmed=True,
+                confirmed=result != "target_changed",
+                detail=(
+                    "original recipient process exited; automatic injection stopped"
+                    if result == "target_changed" else None
+                ),
             )
         else:
             runtime.konsole_pending_defer(handle, agent, interval_seconds=30)
@@ -55,6 +60,8 @@ def submit_when_idle(
     initial_visibility_grace_seconds: float = 10.0,
     reinject_after_seconds: float = 30.0,
     expected_line: str | None = None,
+    expected_agent: str,
+    expected_pid: str | int | None = None,
     is_acknowledged: Callable[[], bool] | None = None,
     monotonic=time.monotonic,
     sleep=time.sleep,
@@ -70,6 +77,14 @@ def submit_when_idle(
         now = monotonic()
         if now >= deadline:
             break
+        # The Konsole session is only an address.  The live foreground process
+        # is the identity, and it must remain the original agent/PID throughout
+        # this detached wait.  A shell or restarted TUI inheriting the tab must
+        # never receive bytes or Enter from an old delivery.
+        if not konsole_driver.session_agent_is_live(
+            service, session, expected_agent, expected_pid=expected_pid
+        ):
+            return "target_changed"
         # A real ``tether resolve`` is stronger evidence than terminal state.
         # Stop immediately once the recipient has read the exact handle, so a
         # completed follow-up never lingers as a stale retry candidate.
@@ -90,7 +105,11 @@ def submit_when_idle(
             )
             if may_reinject:
                 ok, injected_state = konsole_driver.inject_tether_notice(
-                    service, session, expected_line
+                    service,
+                    session,
+                    expected_line,
+                    expected_agent=expected_agent,
+                    expected_pid=expected_pid,
                 )
                 if not ok:
                     return "send_failed"
@@ -119,6 +138,10 @@ def submit_when_idle(
             # being empty before declaring success.  Some Cursor builds accept
             # LF where CR is merely inserted into the follow-up buffer, so use
             # one safe fallback while we still own this exact notice.
+            if not konsole_driver.session_agent_is_live(
+                service, session, expected_agent, expected_pid=expected_pid
+            ):
+                return "target_changed"
             if not konsole_driver.send_line(service, session, "\r", submit=False):
                 return "send_failed"
             sleep(submit_settle_seconds)
@@ -127,6 +150,10 @@ def submit_when_idle(
                 return "submitted"
             if not konsole_driver.composer_contains(service, session, handle):
                 return "submitted"
+            if not konsole_driver.session_agent_is_live(
+                service, session, expected_agent, expected_pid=expected_pid
+            ):
+                return "target_changed"
             if not konsole_driver.send_line(service, session, "\n", submit=False):
                 return "send_failed"
             sleep(submit_settle_seconds)
@@ -147,6 +174,7 @@ def main() -> int:
     parser.add_argument("--handle", required=True)
     parser.add_argument("--agent", help="recipient identity for durable direct delivery")
     parser.add_argument("--db", help="SQLite authority used by the originating send")
+    parser.add_argument("--pid", help="original live foreground process id")
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args()
     runtime = None
@@ -167,6 +195,8 @@ def main() -> int:
             timeout_seconds=args.timeout,
             is_acknowledged=is_acknowledged,
             expected_line=expected_line,
+            expected_agent=args.agent or "",
+            expected_pid=args.pid,
         )
     finally:
         if runtime is not None:

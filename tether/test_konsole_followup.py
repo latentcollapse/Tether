@@ -2,7 +2,14 @@ from tether import konsole_driver
 from tether.konsole_followup import record_result, submit_when_idle
 
 
+def _live(monkeypatch):
+    monkeypatch.setattr(
+        konsole_driver, "session_agent_is_live", lambda *_args, **_kwargs: True
+    )
+
+
 def test_busy_follow_up_waits_then_submits_at_empty_prompt(monkeypatch):
+    _live(monkeypatch)
     states = iter(["busy", "empty", "empty", "busy"])
     calls = []
     clock = iter([0.0, 0.0, 1.0, 2.0])
@@ -10,11 +17,12 @@ def test_busy_follow_up_waits_then_submits_at_empty_prompt(monkeypatch):
     monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: True)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: next(states))
     monkeypatch.setattr(konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
-    assert submit_when_idle("svc", "/Sessions/1", "h&l_messages_abc", monotonic=lambda: next(clock), sleep=lambda _: None) == "submitted"
+    assert submit_when_idle("svc", "/Sessions/1", "h&l_messages_abc", expected_agent="cursor", monotonic=lambda: next(clock), sleep=lambda _: None) == "submitted"
     assert calls == [(('svc', '/Sessions/1', '\r'), {'submit': False})]
 
 
 def test_cr_that_leaves_exact_notice_empty_tries_safe_lf_before_declaring_failure(monkeypatch):
+    _live(monkeypatch)
     states = iter(["empty", "empty", "empty", "busy"])
     calls = []
     clock = iter([0.0, 0.0, 1.0])
@@ -23,7 +31,7 @@ def test_cr_that_leaves_exact_notice_empty_tries_safe_lf_before_declaring_failur
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: next(states))
     monkeypatch.setattr(konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
     assert submit_when_idle(
-        "svc", "/Sessions/1", "h&l_messages_abc", monotonic=lambda: next(clock), sleep=lambda _: None
+        "svc", "/Sessions/1", "h&l_messages_abc", expected_agent="cursor", monotonic=lambda: next(clock), sleep=lambda _: None
     ) == "submitted"
     assert calls == [
         (("svc", "/Sessions/1", "\r"), {"submit": False}),
@@ -32,6 +40,7 @@ def test_cr_that_leaves_exact_notice_empty_tries_safe_lf_before_declaring_failur
 
 
 def test_single_empty_redraw_before_busy_never_submits(monkeypatch):
+    _live(monkeypatch)
     states = iter(["empty", "busy"])
     calls = []
     clock = iter([0.0, 0.0, 1.0, 2.0])
@@ -41,53 +50,59 @@ def test_single_empty_redraw_before_busy_never_submits(monkeypatch):
     monkeypatch.setattr(konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
     assert submit_when_idle(
         "svc", "/Sessions/1", "h&l_messages_abc", timeout_seconds=1.5,
+        expected_agent="cursor",
         monotonic=lambda: next(clock), sleep=lambda _: None,
     ) == "timed_out"
     assert calls == []
 
 
 def test_human_draft_is_never_submitted(monkeypatch):
+    _live(monkeypatch)
     calls = []
     clock = iter([0.0, 0.0, 1.0, 2.0])
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: True)
     monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "draft")
     monkeypatch.setattr(konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
-    assert submit_when_idle("svc", "/Sessions/1", "h&l_messages_abc", timeout_seconds=1.5, monotonic=lambda: next(clock), sleep=lambda _: None) == "timed_out"
+    assert submit_when_idle("svc", "/Sessions/1", "h&l_messages_abc", expected_agent="cursor", timeout_seconds=1.5, monotonic=lambda: next(clock), sleep=lambda _: None) == "timed_out"
     assert calls == []
 
 
 def test_missing_notice_is_never_submitted(monkeypatch):
+    _live(monkeypatch)
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "send_line", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not inject a duplicate")))
     assert submit_when_idle(
-        "svc", "/Sessions/1", "h&l_messages_abc", timeout_seconds=1.0, initial_visibility_grace_seconds=0.0
+        "svc", "/Sessions/1", "h&l_messages_abc", expected_agent="cursor", timeout_seconds=1.0, initial_visibility_grace_seconds=0.0
     ) == "not_visible"
 
 
 def test_lost_notice_reinjects_only_after_verified_empty_prompt(monkeypatch):
+    _live(monkeypatch)
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "empty")
     calls = []
     monkeypatch.setattr(
         konsole_driver,
         "inject_tether_notice",
-        lambda *args: calls.append(args) or (True, "empty"),
+        lambda *args, **kwargs: calls.append((args, kwargs)) or (True, "empty"),
     )
     clock = iter([0.0, 0.0])
     assert submit_when_idle(
         "svc",
         "/Sessions/1",
         "h&l_messages_abc",
+        expected_agent="cursor",
         expected_line="notice h&l_messages_abc",
         initial_visibility_grace_seconds=0.0,
         monotonic=lambda: next(clock),
         sleep=lambda _: None,
     ) == "submitted"
-    assert calls == [("svc", "/Sessions/1", "notice h&l_messages_abc")]
+    assert calls == [(("svc", "/Sessions/1", "notice h&l_messages_abc"), {"expected_agent": "cursor", "expected_pid": None})]
 
 
 def test_lost_notice_never_reinjects_over_human_draft(monkeypatch):
+    _live(monkeypatch)
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "draft")
     monkeypatch.setattr(
@@ -100,6 +115,7 @@ def test_lost_notice_never_reinjects_over_human_draft(monkeypatch):
         "svc",
         "/Sessions/1",
         "h&l_messages_abc",
+        expected_agent="cursor",
         timeout_seconds=1.0,
         expected_line="notice h&l_messages_abc",
         initial_visibility_grace_seconds=0.0,
@@ -109,6 +125,7 @@ def test_lost_notice_never_reinjects_over_human_draft(monkeypatch):
 
 
 def test_read_receipt_stops_waiter_without_typing(monkeypatch):
+    _live(monkeypatch)
     calls = []
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: True)
     monkeypatch.setattr(konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
@@ -116,8 +133,24 @@ def test_read_receipt_stops_waiter_without_typing(monkeypatch):
         "svc",
         "/Sessions/1",
         "h&l_messages_abc",
+        expected_agent="cursor",
         is_acknowledged=lambda: True,
     ) == "acknowledged"
+    assert calls == []
+
+
+def test_replacement_shell_stops_waiter_without_typing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        konsole_driver, "session_agent_is_live", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        konsole_driver, "send_line", lambda *args, **kwargs: calls.append((args, kwargs)) or True
+    )
+    assert submit_when_idle(
+        "svc", "/Sessions/1", "h&l_messages_abc",
+        expected_agent="cursor", expected_pid="42",
+    ) == "target_changed"
     assert calls == []
 
 

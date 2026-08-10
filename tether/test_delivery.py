@@ -12,14 +12,14 @@ def _target(monkeypatch):
     monkeypatch.setattr(
         delivery,
         "_live_konsole_target",
-        lambda *_: {"service": "svc", "session": "/Sessions/7"},
+        lambda *_: {"service": "svc", "session": "/Sessions/7", "pid": "77"},
     )
 
 
 def test_empty_prompt_is_submitted_and_reported_truthfully(monkeypatch, tmp_path):
     runtime = _runtime(tmp_path)
     _target(monkeypatch)
-    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_: (True, "empty"))
+    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_args, **_kwargs: (True, "empty"))
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
     monkeypatch.setattr(konsole_driver, "screen_contains", lambda *_: True)
     try:
@@ -43,7 +43,7 @@ def test_human_draft_lands_but_never_autosubmits(monkeypatch, tmp_path):
     runtime = _runtime(tmp_path)
     _target(monkeypatch)
     spawned = []
-    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_: (True, "draft"))
+    monkeypatch.setattr(konsole_driver, "inject_tether_notice", lambda *_args, **_kwargs: (True, "draft"))
     monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: True)
     monkeypatch.setattr(konsole_driver, "screen_contains", lambda *_: True)
     monkeypatch.setattr(delivery, "_spawn_followup", lambda **kwargs: spawned.append(kwargs))
@@ -126,3 +126,15 @@ def test_delivery_tables_are_additive_and_queryable(tmp_path):
         assert runtime.delivery_attempts("h&l_messages_a", "codex")[0]["outcome"] == "injected"
     finally:
         runtime.close()
+
+
+def test_notice_line_is_inert_and_excludes_sender_content():
+    line = delivery.notice_line(
+        to_agent="cursor",
+        from_agent="claude",
+        subject="touch /tmp/owned; rm -rf something",
+        handle="h&l_messages_deadbeef",
+    )
+    assert line == "# [Tether] resolve h&l_messages_deadbeef --agent cursor"
+    assert "touch" not in line
+    assert "claude" not in line

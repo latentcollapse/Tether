@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -40,13 +41,17 @@ class DeliveryOutcome:
 
 
 def notice_line(*, to_agent: str, from_agent: str, subject: str, handle: str) -> str:
-    short_subject = " ".join(subject.split())
-    if len(short_subject) > 120:
-        short_subject = short_subject[:117] + "..."
-    return (
-        f"[Tether] New message from {from_agent}: {short_subject} "
-        f"— run `tether resolve '{handle}' --agent {to_agent}`"
-    )
+    """Return an inert, sender-independent wake instruction.
+
+    The leading shell comment is defense in depth: even if every target guard
+    fails and Enter reaches a shell, the wake cannot execute.  Subject, body,
+    and sender are deliberately absent because they are untrusted message data.
+    """
+    if not re.fullmatch(r"h&l_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+", handle or ""):
+        raise ValueError("invalid Tether handle for prompt delivery")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", to_agent or ""):
+        raise ValueError("invalid Tether agent id for prompt delivery")
+    return f"# [Tether] resolve {handle} --agent {to_agent}"
 
 
 def _persist(runtime, outcome: DeliveryOutcome) -> DeliveryOutcome:
@@ -64,7 +69,10 @@ def _persist(runtime, outcome: DeliveryOutcome) -> DeliveryOutcome:
     return outcome
 
 
-def _spawn_followup(*, service: str, session: str, handle: str, agent: str, db_path: str) -> None:
+def _spawn_followup(
+    *, service: str, session: str, handle: str, agent: str, db_path: str,
+    target_pid: str | int | None = None,
+) -> None:
     """Detach the exact-handle waiter from a short-lived sender process."""
     command = [
         sys.executable,
@@ -81,6 +89,8 @@ def _spawn_followup(*, service: str, session: str, handle: str, agent: str, db_p
         "--db",
         db_path,
     ]
+    if target_pid is not None:
+        command.extend(["--pid", str(target_pid)])
     unit = "tether-followup-" + hashlib.sha256(handle.encode("utf-8")).hexdigest()[:16]
     try:
         result = subprocess.run(
@@ -127,12 +137,12 @@ def _live_konsole_target(runtime, agent: str) -> dict | None:
             ),
             None,
         )
-        if bound is not None and konsole_driver.guess_agent(bound, registry) == agent:
+        if bound is not None and konsole_driver.process_agent(bound, registry) == agent:
             return bound
         runtime.konsole_unbind(agent)
 
     for session in sessions:
-        if konsole_driver.guess_agent(session, registry) == agent:
+        if konsole_driver.process_agent(session, registry) == agent:
             runtime.konsole_bind(agent, session["service"], session["session"])
             return session
     return None
@@ -167,8 +177,14 @@ def deliver_to_konsole(
 
     # Register before touching the PTY.  A crash after sendText can therefore
     # never create an untracked notification.
-    runtime.konsole_pending_add(handle, to_agent, line)
-    ok, state = konsole_driver.inject_tether_notice(target["service"], target["session"], line)
+    runtime.konsole_pending_add(handle, to_agent, line, target_pid=target.get("pid"))
+    ok, state = konsole_driver.inject_tether_notice(
+        target["service"],
+        target["session"],
+        line,
+        expected_agent=to_agent,
+        expected_pid=target.get("pid"),
+    )
     runtime.delivery_attempt(handle, to_agent, "konsole", "injected" if ok else "rejected", state)
     if not ok:
         return _persist(
@@ -240,6 +256,7 @@ def deliver_to_konsole(
             handle=handle,
             agent=to_agent,
             db_path=runtime.db_path,
+            target_pid=target.get("pid"),
         )
     return outcome
 
