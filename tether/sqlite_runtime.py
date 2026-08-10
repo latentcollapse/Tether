@@ -503,10 +503,21 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         return _decode_resilient(row["lc_bytes"])
 
     def mark_read(self, handle: str, agent: str):
-        """Mark a handle as read by an agent."""
+        """Mark a handle read and acknowledge its pending prompt delivery.
+
+        Resolve can arrive through the CLI, MCP, or a future transport.  The
+        SQLite runtime is the common authority for all of them, so queue
+        completion belongs here rather than in any one adapter.
+        """
         self._conn.execute(
             "INSERT OR IGNORE INTO tether_reads (handle, agent) VALUES (?, ?)",
             (handle, agent)
+        )
+        self._conn.execute(
+            "UPDATE tether_konsole_pending "
+            "SET status='acked', attempts=max_attempts, next_attempt_at=NULL, updated_at=? "
+            "WHERE handle=? AND agent=? AND status='pending'",
+            (datetime.now(timezone.utc).isoformat(), handle, agent),
         )
         self._conn.commit()
 
@@ -815,14 +826,20 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         )
         self._conn.commit()
 
-    def konsole_pending_due(self) -> list[dict]:
-        """Pending deliveries whose next attempt is due."""
+    def konsole_pending_due(self, agent: str | None = None) -> list[dict]:
+        """Pending deliveries whose next attempt is due, optionally for one agent."""
         now = datetime.now(timezone.utc).isoformat()
-        rows = self._conn.execute(
-            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, next_attempt_at, target_pid "
-            "FROM tether_konsole_pending WHERE status='pending' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?",
-            (now,),
-        ).fetchall()
+        sql = (
+            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, "
+            "next_attempt_at, target_pid FROM tether_konsole_pending "
+            "WHERE status='pending' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?"
+        )
+        params: tuple[str, ...] = (now,)
+        if agent is not None:
+            sql += " AND agent=?"
+            params = (now, agent)
+        sql += " ORDER BY next_attempt_at, created_at"
+        rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     def konsole_pending_get(self, handle: str, agent: str) -> dict | None:

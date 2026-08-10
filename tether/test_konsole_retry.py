@@ -6,8 +6,10 @@ class _Runtime:
         self.resolved: list[tuple[str, str, str]] = []
         self.deferred: list[tuple[str, str, int]] = []
         self.deliveries = []
+        self.due_agents = []
 
-    def konsole_pending_due(self):
+    def konsole_pending_due(self, agent=None):
+        self.due_agents.append(agent)
         return [{"handle": "h&l_messages_abc", "agent": "cursor", "line": "notice", "interval_seconds": 30, "attempts": 1, "max_attempts": 3}]
 
     def is_read(self, _handle, _agent):
@@ -47,6 +49,14 @@ def test_visible_busy_cursor_follow_up_is_deferred_not_submitted(monkeypatch):
     konsole_retry.process_due(runtime)
     assert runtime.deferred == [("h&l_messages_abc", "cursor", 30)]
     assert runtime.resolved == []
+
+
+def test_retry_pass_scopes_due_query_to_receiver_agent(monkeypatch):
+    runtime = _Runtime()
+    _live_target(monkeypatch)
+    monkeypatch.setattr(runtime, "konsole_pending_due", lambda agent=None: runtime.due_agents.append(agent) or [])
+    konsole_retry.process_due(runtime, agent_filter="claude")
+    assert runtime.due_agents == ["claude"]
 
 
 def test_visible_idle_tether_follow_up_is_submitted_once(monkeypatch):
@@ -99,7 +109,7 @@ def test_restarted_agent_process_never_receives_old_delivery(monkeypatch):
     monkeypatch.setattr(
         runtime,
         "konsole_pending_due",
-        lambda: [{
+        lambda agent=None: [{
             "handle": "h&l_messages_abc", "agent": "cursor", "line": "notice",
             "interval_seconds": 30, "attempts": 1, "max_attempts": 3,
             "target_pid": "41",

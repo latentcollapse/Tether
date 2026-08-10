@@ -76,11 +76,15 @@ def test_resolve_records_recipient_read_receipt(server) -> None:
         {"from": "claude", "to": "codex", "subject": "audit", "text": "read me"},
         owner="codex",
     )
+    server.runtime.konsole_pending_add(
+        handle, "codex", "safe notice", interval_seconds=0, target_pid=42
+    )
     resolved = asyncio.run(
         server.call_tool("tether_resolve", {"handle": handle, "for_agent": "codex"})
     )
     assert json.loads(resolved[0].text)["subject"] == "audit"
     assert server.runtime.is_read(handle, "codex")
+    assert server.runtime.konsole_pending_get(handle, "codex")["status"] == "acked"
 
 
 def test_resolve_uses_pinned_mcp_agent_identity(server, monkeypatch) -> None:

@@ -31,8 +31,9 @@ How it works
 - Idempotent: the handle is content-addressed and reading it marks it done, so a
   duplicate nudge after a read is a harmless no-op.
 
-The loop runs as a daemon thread inside the dashboard server process (the same
-process that owns the D-Bus binding and serves /api/konsole/deliver).
+The loop runs as a daemon thread inside every long-lived agent receiver, scoped
+to that receiver's agent.  The dashboard may also run an unscoped recovery
+worker; queue transitions are idempotent.
 """
 import logging
 import threading
@@ -44,7 +45,7 @@ SCAN_INTERVAL_SECONDS = 5    # how often to check for due deliveries
 SETTLE_SECONDS = 0.6         # wait after an inject before reading the screen back
 
 
-def process_due(rt) -> dict:
+def process_due(rt, agent_filter: str | None = None) -> dict:
     """Run one pass over due pending deliveries. Returns a small stats dict.
 
     Terminator is DELIVERY CONFIRMATION, not blind retry. For each pending row, in order:
@@ -62,7 +63,7 @@ def process_due(rt) -> dict:
     from tether.delivery import _live_konsole_target
 
     stats = {"acked": 0, "delivered": 0, "unbound": 0, "reinjected": 0, "exhausted": 0}
-    for row in rt.konsole_pending_due():
+    for row in rt.konsole_pending_due(agent=agent_filter):
         handle, agent = row["handle"], row["agent"]
 
         if rt.is_read(handle, agent):
@@ -187,7 +188,7 @@ def process_due(rt) -> dict:
     return stats
 
 
-def _loop(db_path: str, stop_event: threading.Event) -> None:
+def _loop(db_path: str, stop_event: threading.Event, agent: str | None = None) -> None:
     from tether.sqlite_runtime import SQLiteRuntime
     while not stop_event.is_set():
         stop_event.wait(SCAN_INTERVAL_SECONDS)
@@ -196,7 +197,7 @@ def _loop(db_path: str, stop_event: threading.Event) -> None:
         try:
             rt = SQLiteRuntime(db_path=db_path)
             try:
-                process_due(rt)
+                process_due(rt, agent_filter=agent)
             finally:
                 rt.close()
         except Exception:
@@ -204,11 +205,15 @@ def _loop(db_path: str, stop_event: threading.Event) -> None:
             logger.exception("konsole retry loop pass failed")
 
 
-def start(db_path: str) -> threading.Event:
+def start(db_path: str, agent: str | None = None) -> threading.Event:
     """Start the retry loop as a daemon thread. Returns the stop Event so the caller
     can shut it down cleanly."""
     stop_event = threading.Event()
-    thread = threading.Thread(target=_loop, args=(db_path, stop_event), daemon=True)
+    thread = threading.Thread(target=_loop, args=(db_path, stop_event, agent), daemon=True)
     thread.start()
-    logger.info("konsole delivery retry loop started (scan=%ds)", SCAN_INTERVAL_SECONDS)
+    logger.info(
+        "konsole delivery retry loop started (scan=%ds, agent=%s)",
+        SCAN_INTERVAL_SECONDS,
+        agent or "*",
+    )
     return stop_event

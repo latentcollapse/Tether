@@ -178,6 +178,37 @@ def test_konsole_terminal_delivery_has_no_retry_schedule(rt: SQLiteRuntime) -> N
     assert rt.konsole_pending_due() == []
 
 
+def test_mark_read_atomically_acks_matching_pending_delivery(rt: SQLiteRuntime) -> None:
+    handle = rt.collapse(
+        "messages",
+        {"from": "cursor", "to": "claude", "subject": "done", "text": "read me"},
+        owner="claude",
+    )
+    rt.konsole_pending_add(handle, "claude", "safe notice", interval_seconds=0, target_pid=42)
+
+    rt.resolve(handle, for_agent="claude")
+
+    row = rt.konsole_pending_get(handle, "claude")
+    assert rt.is_read(handle, "claude")
+    assert row["status"] == "acked"
+    assert row["attempts"] == row["max_attempts"]
+    assert row["next_attempt_at"] is None
+
+
+def test_due_query_can_be_scoped_to_one_agent(rt: SQLiteRuntime) -> None:
+    for agent in ("claude", "cursor"):
+        handle = rt.collapse(
+            "messages",
+            {"from": "codex", "to": agent, "subject": agent, "text": "pending"},
+            owner=agent,
+        )
+        rt.konsole_pending_add(handle, agent, "safe notice", interval_seconds=0, target_pid=42)
+
+    rows = rt.konsole_pending_due(agent="claude")
+
+    assert [row["agent"] for row in rows] == ["claude"]
+
+
 def test_legacy_pending_migration_is_concurrency_safe(tmp_path: Path) -> None:
     db_path = str(tmp_path / "legacy.db")
     connection = sqlite3.connect(db_path)

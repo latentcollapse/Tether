@@ -253,9 +253,9 @@ def main():
     url = f"http://localhost:{port}"
 
     # Register endpoint + start heartbeat against the shared DB
+    db = _db_path()
     try:
         import sqlite3
-        db = _db_path()
         os.makedirs(os.path.dirname(db), exist_ok=True)
         conn = sqlite3.connect(db)
         conn.execute(
@@ -295,8 +295,23 @@ def main():
     hb = threading.Thread(target=_heartbeat_loop, args=(args.agent, port, stop_event), daemon=True)
     hb.start()
 
+    # The receiver is the durable process that exists even when the optional
+    # dashboard is closed.  It must therefore own retry processing for its
+    # agent; otherwise prompt-held rows accumulate forever while `serve`
+    # misleadingly remains healthy.
+    retry_stop = None
+    try:
+        from tether import konsole_retry
+        retry_stop = konsole_retry.start(db, agent=args.agent)
+    except Exception as exc:
+        logging.getLogger(__name__).exception(
+            "delivery retry worker failed to start for %s: %s", args.agent, exc
+        )
+
     def _shutdown(sig, frame):
         stop_event.set()
+        if retry_stop is not None:
+            retry_stop.set()
         hb.join(timeout=6)
         server.shutdown()
     signal.signal(signal.SIGTERM, _shutdown)
@@ -309,6 +324,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         stop_event.set()
+        if retry_stop is not None:
+            retry_stop.set()
         hb.join(timeout=6)
         server.shutdown()
 
