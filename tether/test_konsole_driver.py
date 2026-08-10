@@ -26,24 +26,42 @@ def test_prompt_state_preserves_cursor_draft(monkeypatch):
     assert _state(monkeypatch, "output\n  → Please do not submit this yet\n") == "draft"
 
 
-def test_prompt_state_marks_live_cursor_turn_busy_even_with_empty_follow_up(monkeypatch):
+def test_prompt_state_allows_empty_follow_up_during_live_cursor_turn(monkeypatch):
     screen = "output\n  ⠠⠜ Working  12.1k tokens\n  → Add a follow-up  ctrl+c to stop\n"
-    assert _state(monkeypatch, screen) == "busy"
+    assert _state(monkeypatch, screen) == "empty"
 
 
-def test_prompt_state_marks_live_cursor_tool_activity_busy(monkeypatch):
+def test_prompt_state_allows_empty_follow_up_during_cursor_tool_activity(monkeypatch):
     screen = "output\n  ⠰⠰ Grepping  7.58k tokens\n  → Add a follow-up  ctrl+c to stop\n"
-    assert _state(monkeypatch, screen) == "busy"
+    assert _state(monkeypatch, screen) == "empty"
 
 
-def test_prompt_state_marks_claude_spinner_footer_busy(monkeypatch):
+def test_prompt_state_allows_bare_claude_follow_up_while_working(monkeypatch):
     screen = (
         "✢ Nucleating… (39s · ↓ 10 tokens)\n"
         "────────────────────────\n"
         "❯ \n"
         "⏵⏵ bypass permissions on · esc to interrupt · ← 1 agent\n"
     )
-    assert _state(monkeypatch, screen) == "busy"
+    assert _state(monkeypatch, screen) == "empty"
+
+
+def test_prompt_state_preserves_claude_follow_up_draft_while_working(monkeypatch):
+    screen = (
+        "✢ Nucleating…\n"
+        "❯ Ping me when Sol finishes\n"
+        "⏵⏵ bypass permissions on · esc to interrupt · ← 1 agent\n"
+    )
+    assert _state(monkeypatch, screen) == "draft"
+
+
+def test_prompt_state_recognises_current_codex_placeholder(monkeypatch):
+    screen = (
+        "• Working (8s • esc to interrupt)\n"
+        "› Run /review on my current changes\n"
+        "gpt-5.6-sol medium · Goal achieved (47m)\n"
+    )
+    assert _state(monkeypatch, screen) == "empty"
 
 
 def test_prompt_state_recovers_idle_cursor_after_prior_tether_notice(monkeypatch):

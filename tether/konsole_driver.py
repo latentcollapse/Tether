@@ -206,20 +206,10 @@ def prompt_state(service: str, session: str) -> str:
     if not screen:
         return "unknown"
 
-    # Cursor keeps an "Add a follow-up" composer visible while it is generating.
-    # That looks empty, but Enter creates a queued follow-up rather than waking
-    # the currently running turn.  Treat the live activity indicator as an
-    # explicit fourth state so the retry loop can wait for a real idle composer.
-    # Only inspect the viewport tail: prior turn output may contain old status
-    # words and must not suppress a genuinely idle prompt.
-    recent = screen.splitlines()[-24:]
-    activity = re.compile(
-        r"(?:^|\s)(?:Running|Working|Reading|Thinking|Editing|Grepping|"
-        r"Searching|Planning|Building|Testing|Compacting)(?:\s|$)"
-    )
-    active_footer = re.compile(r"(?:esc to interrupt|←\s*\d+\s+agents?\b)", re.IGNORECASE)
-    if any(activity.search(raw) or active_footer.search(raw) for raw in recent):
-        return "busy"
+    # Agent activity does not make the composer unsafe.  An empty follow-up box
+    # while an agent is working is precisely where a tmail should be submitted:
+    # the TUI queues it behind the current turn.  Only text actually present in
+    # the composer is a draft and blocks delivery.
 
     # Work from the bottom: terminal output can contain old prompts above the
     # current one.  Strip only terminal padding; do not collapse the actual draft.
@@ -259,7 +249,10 @@ def prompt_state(service: str, session: str) -> str:
         # appears after the same leading glyph.
         if line.startswith("›"):
             suffix = line[1:].strip()
-            if suffix == "Find and fix a bug in @filename":
+            if suffix in {
+                "Find and fix a bug in @filename",
+                "Run /review on my current changes",
+            }:
                 return "empty"
             if suffix:
                 return "draft"
@@ -297,7 +290,7 @@ def prompt_state(service: str, session: str) -> str:
             return "draft"
 
         # Kilo coding agent: shows Kilo Gateway or ctrl+p commands at bottom
-        if "Kilo Gateway" in line or "ctrl+p commands" in line or "esc interrupt" in line:
+        if "Kilo Gateway" in line or "ctrl+p commands" in line:
             return "empty"
 
     return "unknown"

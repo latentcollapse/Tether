@@ -14,6 +14,27 @@ import time
 POLL_SECONDS = 1.0
 
 
+def delivery_authority_path() -> str:
+    """Return the only database allowed to address live terminals.
+
+    ``TETHER_DB`` intentionally does not broaden this boundary: tests and
+    one-off tools commonly point it at temporary databases.  Operators who
+    deliberately maintain a different live authority must opt in explicitly
+    with ``TETHER_DELIVERY_DB``.
+    """
+    explicit = os.environ.get("TETHER_DELIVERY_DB")
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share"
+    )
+    return os.path.abspath(os.path.join(data_home, "tether", "postoffice.db"))
+
+
+def is_delivery_authority(db_path: str) -> bool:
+    return os.path.abspath(os.path.expanduser(db_path)) == delivery_authority_path()
+
+
 def _unit_name(db_path: str) -> str:
     digest = hashlib.sha256(os.path.abspath(db_path).encode()).hexdigest()[:12]
     return f"tether-delivery-{digest}"
@@ -26,6 +47,8 @@ def _lock_path(db_path: str) -> str:
 def ensure_started(db_path: str) -> None:
     """Ensure the one dispatcher for this database is running."""
     db_path = os.path.abspath(db_path)
+    if not is_delivery_authority(db_path):
+        return
     command = [sys.executable, "-m", "tether.delivery_worker", "--db", db_path]
     unit = _unit_name(db_path)
     try:
@@ -106,6 +129,8 @@ def process_once(runtime) -> dict[str, int]:
 def run(db_path: str, poll_seconds: float = POLL_SECONDS) -> int:
     from tether.sqlite_runtime import SQLiteRuntime
 
+    if not is_delivery_authority(db_path):
+        return 2
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     lock_file = open(_lock_path(db_path), "a+", encoding="utf-8")
     try:

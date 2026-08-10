@@ -1,5 +1,5 @@
 from tether import konsole_driver
-from tether.delivery_worker import process_once
+from tether.delivery_worker import is_delivery_authority, process_once, run
 from tether.sqlite_runtime import SQLiteRuntime
 
 
@@ -87,3 +87,17 @@ def test_kill_switch_prevents_target_resolution_and_writes(monkeypatch, tmp_path
         assert process_once(runtime) == {"delivered": 0, "waiting": 0, "missing": 0}
     finally:
         runtime.close()
+
+
+def test_temporary_database_cannot_own_live_delivery(monkeypatch, tmp_path):
+    monkeypatch.delenv("TETHER_DELIVERY_DB", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    temporary = str(tmp_path / "pytest.db")
+    assert not is_delivery_authority(temporary)
+    assert run(temporary, poll_seconds=0) == 2
+
+
+def test_nondefault_authority_requires_explicit_opt_in(monkeypatch, tmp_path):
+    authority = str(tmp_path / "private" / "postoffice.db")
+    monkeypatch.setenv("TETHER_DELIVERY_DB", authority)
+    assert is_delivery_authority(authority)
