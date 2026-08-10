@@ -41,13 +41,19 @@ def test_idle_recipient_gets_one_atomic_inert_line(monkeypatch, tmp_path):
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "empty")
     monkeypatch.setattr(konsole_driver.time, "sleep", lambda *_: None)
     calls = []
+    monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: bool(calls))
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: "idle")
     monkeypatch.setattr(
         konsole_driver, "send_line",
         lambda service, session, text, submit=False: calls.append(text) or True,
     )
     try:
         assert process_once(runtime)["delivered"] == 1
-        assert calls == ["# [Tether] resolve h&l_messages_idle --agent claude\r"]
+        assert calls == [
+            "# [Tether] resolve h&l_messages_idle --agent claude",
+            "\r",
+        ]
         assert runtime.konsole_pending_get("h&l_messages_idle", "claude")["status"] == "delivered"
     finally:
         runtime.close()

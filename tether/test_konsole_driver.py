@@ -133,7 +133,9 @@ def test_unknown_prompt_never_autosubmits(monkeypatch):
 def test_empty_prompt_autosubmits(monkeypatch):
     monkeypatch.setattr(konsole_driver, "session_agent_is_live", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(konsole_driver, "prompt_state", lambda *_: "empty")
-    monkeypatch.setattr(konsole_driver, "current_composer_text", lambda *_: "notice")
+    monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: True)
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: "idle")
     monkeypatch.setattr(konsole_driver.time, "sleep", lambda *_: None)
     calls = []
     monkeypatch.setattr(
@@ -142,10 +144,13 @@ def test_empty_prompt_autosubmits(monkeypatch):
         lambda service, session, text, submit: calls.append((service, session, text, submit)) or True,
     )
     ok, state = konsole_driver.inject_tether_notice(
-        "svc", "/Sessions/1", "notice", expected_agent="cursor"
+        "svc", "/Sessions/1", "# [Tether] resolve h&l_messages_notice --agent cursor", expected_agent="cursor"
     )
     assert (ok, state) == (True, "empty")
-    assert calls == [("svc", "/Sessions/1", "notice\r", False)]
+    assert calls == [
+        ("svc", "/Sessions/1", "# [Tether] resolve h&l_messages_notice --agent cursor", False),
+        ("svc", "/Sessions/1", "\r", False),
+    ]
 
 
 def test_empty_check_does_not_submit_if_human_types_during_injection(monkeypatch):
@@ -169,6 +174,35 @@ def test_empty_check_does_not_submit_if_human_types_during_injection(monkeypatch
     )
     assert (ok, state) == (False, "draft")
     assert calls == []
+
+
+def test_active_codex_uses_tab_and_confirms_composer_cleared(monkeypatch):
+    monkeypatch.setattr(konsole_driver, "session_agent_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: True)
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: False)
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: "tab to queue message")
+    monkeypatch.setattr(konsole_driver.time, "sleep", lambda *_: None)
+    calls = []
+    monkeypatch.setattr(
+        konsole_driver, "send_line",
+        lambda _s, _session, text, submit=False: calls.append(text) or True,
+    )
+    assert konsole_driver.submit_owned_tether_notice(
+        "svc", "/Sessions/1", "h&l_messages_x", expected_agent="codex"
+    ) == (True, "empty")
+    assert calls == ["\t"]
+
+
+def test_submission_is_not_delivered_while_handle_remains(monkeypatch):
+    monkeypatch.setattr(konsole_driver, "session_agent_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(konsole_driver, "composer_is_tether_owned", lambda *_: True)
+    monkeypatch.setattr(konsole_driver, "composer_contains", lambda *_: True)
+    monkeypatch.setattr(konsole_driver, "get_displayed_text", lambda *_: "idle")
+    monkeypatch.setattr(konsole_driver.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(konsole_driver, "send_line", lambda *_a, **_k: True)
+    assert konsole_driver.submit_owned_tether_notice(
+        "svc", "/Sessions/1", "h&l_messages_x", expected_agent="cursor"
+    ) == (False, "not_submitted")
 
 
 def test_shell_replacing_agent_refuses_all_writes(monkeypatch):

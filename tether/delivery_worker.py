@@ -107,13 +107,21 @@ def process_once(runtime) -> dict[str, int]:
             stats["missing"] += 1
             continue
         line = notice_line(to_agent=agent, from_agent="", subject="", handle=handle)
-        ok, state = konsole_driver.inject_tether_notice(
-            target["service"],
-            target["session"],
-            line,
-            expected_agent=agent,
-            expected_pid=target.get("pid"),
-        )
+        if konsole_driver.composer_is_tether_owned(
+            target["service"], target["session"], handle
+        ):
+            ok, state = konsole_driver.submit_owned_tether_notice(
+                target["service"], target["session"], handle,
+                expected_agent=agent, expected_pid=target.get("pid"),
+            )
+        else:
+            ok, state = konsole_driver.inject_tether_notice(
+                target["service"],
+                target["session"],
+                line,
+                expected_agent=agent,
+                expected_pid=target.get("pid"),
+            )
         if ok and state == "empty":
             runtime.konsole_pending_resolve(handle, agent, "delivered")
             runtime.delivery_record(

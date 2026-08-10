@@ -318,9 +318,7 @@ def inject_tether_notice(
     if state != "empty":
         return False, state
 
-    # Observe a stable empty prompt twice.  Then send the inert comment and
-    # newline in one D-Bus operation so there is no half-written notice waiting
-    # for a later worker to press Enter.
+    # Observe a stable empty prompt twice before placing the inert line.
     time.sleep(0.12)
     if not session_agent_is_live(
         service, session, expected_agent, expected_pid=expected_pid
@@ -329,7 +327,47 @@ def inject_tether_notice(
     second_state = prompt_state(service, session)
     if second_state != "empty":
         return False, second_state
-    return send_line(service, session, text + "\r", submit=False), "empty"
+    if not send_line(service, session, text, submit=False):
+        return False, "send_failed"
+    time.sleep(0.12)
+    handle = next((part for part in text.split() if part.startswith("h&l_")), "")
+    if not handle or not composer_is_tether_owned(service, session, handle):
+        return False, "ownership_lost"
+    return submit_owned_tether_notice(
+        service,
+        session,
+        handle,
+        expected_agent=expected_agent,
+        expected_pid=expected_pid,
+    )
+
+
+def submit_owned_tether_notice(
+    service: str,
+    session: str,
+    handle: str,
+    *,
+    expected_agent: str,
+    expected_pid: str | int | None = None,
+) -> tuple[bool, str]:
+    """Submit an exact Tether-owned composer using the TUI's live key binding."""
+    if not session_agent_is_live(
+        service, session, expected_agent, expected_pid=expected_pid
+    ):
+        return False, "wrong_target"
+    if not composer_is_tether_owned(service, session, handle):
+        return False, "not_owned"
+
+    screen = get_displayed_text(service, session)
+    # Codex uses Tab to queue a follow-up while a turn is active. Enter merely
+    # leaves the text in its composer. Other supported TUIs submit with Enter.
+    submit_key = "\t" if expected_agent == "codex" and "tab to queue message" in screen.lower() else "\r"
+    if not send_line(service, session, submit_key, submit=False):
+        return False, "submit_failed"
+    time.sleep(0.25)
+    if composer_contains(service, session, handle):
+        return False, "not_submitted"
+    return True, "empty"
 
 
 def set_title(service: str, session: str, title: str) -> bool:
