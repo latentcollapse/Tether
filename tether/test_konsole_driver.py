@@ -108,8 +108,8 @@ def test_unknown_prompt_never_autosubmits(monkeypatch):
     ok, state = konsole_driver.inject_tether_notice(
         "svc", "/Sessions/1", "notice", expected_agent="cursor"
     )
-    assert (ok, state) == (True, "unknown")
-    assert calls == [("svc", "/Sessions/1", "notice", False)]
+    assert (ok, state) == (False, "unknown")
+    assert calls == []
 
 
 def test_empty_prompt_autosubmits(monkeypatch):
@@ -127,10 +127,7 @@ def test_empty_prompt_autosubmits(monkeypatch):
         "svc", "/Sessions/1", "notice", expected_agent="cursor"
     )
     assert (ok, state) == (True, "empty")
-    assert calls == [
-        ("svc", "/Sessions/1", "notice", False),
-        ("svc", "/Sessions/1", "\r", False),
-    ]
+    assert calls == [("svc", "/Sessions/1", "notice\r", False)]
 
 
 def test_empty_check_does_not_submit_if_human_types_during_injection(monkeypatch):
@@ -152,8 +149,8 @@ def test_empty_check_does_not_submit_if_human_types_during_injection(monkeypatch
     ok, state = konsole_driver.inject_tether_notice(
         "svc", "/Sessions/1", "notice", expected_agent="cursor"
     )
-    assert (ok, state) == (True, "draft")
-    assert calls == [("notice", False)]
+    assert (ok, state) == (False, "draft")
+    assert calls == []
 
 
 def test_shell_replacing_agent_refuses_all_writes(monkeypatch):

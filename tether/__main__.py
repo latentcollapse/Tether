@@ -75,7 +75,7 @@ def _konsole_wake(*, to_agent: str, from_agent: str, subject: str, handle: str, 
             subject=subject,
             handle=handle,
         )
-        return outcome.status in {"notified", "delivered"}
+        return outcome.status in {"queued", "notified", "delivered"}
     finally:
         runtime.close()
 
@@ -150,6 +150,13 @@ def _build_parser():
     inbox_parser.add_argument("--agent", default="human", help="Agent name for read status (default: human)")
     inbox_parser.add_argument("--tag", help="Filter by tag")
     inbox_parser.add_argument("--limit", type=int, default=20, help="Max handles to show")
+
+    # Operator-only kill switch. Delivery remains queued while paused.
+    delivery_parser = subparsers.add_parser(
+        "delivery", help=argparse.SUPPRESS
+    )
+    delivery_parser.add_argument("delivery_action", choices=("pause", "resume", "status"))
+    delivery_parser.add_argument("--reason")
     
     # tables command
     subparsers.add_parser("tables", help="List all tables")
@@ -1726,15 +1733,6 @@ def _run_dashboard(parser: argparse.ArgumentParser) -> None:
     except Exception:
         pass  # reconcile loop is an enhancement; never block the server on it
 
-    # Konsole delivery ACK+retry: re-nudge fire-and-forget injections until the
-    # recipient reads the handle. Daemon thread in this process (it owns the
-    # D-Bus binding and serves /api/konsole/deliver).
-    try:
-        from tether import konsole_retry
-        konsole_retry.start(_dashboard_db_path())
-    except Exception:
-        pass  # retry loop is an enhancement; never block the server on it
-
     import uvicorn
 
     # Now that startup is done, open the browser as soon as the port is truly live.
@@ -1878,6 +1876,14 @@ def main():
     try:
         if args.command == "board":
             _run_board_command(args, rt)
+        elif args.command == "delivery":
+            if args.delivery_action == "pause":
+                rt.delivery_set_paused(True, args.reason or "operator pause")
+            elif args.delivery_action == "resume":
+                rt.delivery_set_paused(False, None)
+                from tether.delivery_worker import ensure_started
+                ensure_started(db_path)
+            print("paused" if rt.delivery_is_paused() else "running")
         elif args.command == "collapse":
             data_str = _read_input(args.file)
             value = json.loads(data_str)

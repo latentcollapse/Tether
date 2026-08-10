@@ -182,40 +182,32 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         """)
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_routes_agents ON tether_routes(from_agent, to_agent)")
 
-        # Konsole D-Bus bindings (v2.0) — agent id → live Konsole tab
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS tether_konsole_bindings (
-                agent       TEXT PRIMARY KEY,
-                service     TEXT NOT NULL,
-                session     TEXT NOT NULL,
-                bound_at    TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
-        # Konsole delivery ACK+retry queue (v2.1) — at-least-once notification.
-        # D-Bus sendText is fire-and-forget (returns ok before the agent's TUI
-        # has ingested the keystroke), so a single inject is a lossy datagram that
-        # races the TUI's redraw loop. Each injected handle-line is registered here
-        # and re-nudged on an interval until the recipient ACKs by reading the
-        # handle (a row in tether_reads, written when it runs tether_receive),
-        # or until attempts are exhausted. Idempotent: the handle is
-        # content-addressed, so a duplicate nudge after a read is a harmless no-op.
+        # One durable row per recipient/handle.  Delivery owns no cached terminal
+        # identity and has no retry budget: the singleton dispatcher simply waits
+        # until a freshly resolved recipient is positively idle.
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS tether_konsole_pending (
                 handle          TEXT NOT NULL,
                 agent           TEXT NOT NULL,
-                line            TEXT NOT NULL,
-                attempts        INTEGER NOT NULL DEFAULT 0,
-                max_attempts    INTEGER NOT NULL DEFAULT 8,
-                interval_seconds INTEGER NOT NULL DEFAULT 20,
-                next_attempt_at TEXT,
-                status          TEXT NOT NULL DEFAULT 'pending',
-                target_pid      TEXT,
+                status          TEXT NOT NULL DEFAULT 'pending'
+                                CHECK(status IN ('pending', 'delivered')),
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (handle, agent)
             )
         """)
         self._migrate_konsole_pending()
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tether_delivery_control (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+                reason TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        self._conn.execute(
+            "INSERT OR IGNORE INTO tether_delivery_control(singleton, paused) VALUES (1, 0)"
+        )
         # End-to-end notification state.  A message row proves durability; it
         # does not prove that a live recipient was notified or that text landed
         # in its prompt.  Keep those facts separate and queryable so every send
@@ -271,101 +263,42 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
 
 
     def _migrate_konsole_pending(self) -> None:
-        """Serialize the v2.1 delivery migration across concurrent runtimes."""
-        from .delivery import notice_line
-
-        # Dashboard requests, retry workers, and direct sends can all construct a
-        # runtime simultaneously.  Take the writer lock before inspecting schema;
-        # otherwise two stale PRAGMA results can both attempt the table rebuild.
+        """Collapse legacy retry state to pending/delivered delivery truth."""
         self._conn.commit()
         self._conn.execute("BEGIN IMMEDIATE")
         try:
-            pending_columns = {
-                row["name"]: row
+            columns = [
+                row["name"]
                 for row in self._conn.execute("PRAGMA table_info(tether_konsole_pending)")
-            }
-            if "target_pid" not in pending_columns:
+            ]
+            desired = ["handle", "agent", "status", "created_at", "updated_at"]
+            if columns != desired:
+                self._conn.execute("DROP TABLE IF EXISTS tether_konsole_pending_legacy")
                 self._conn.execute(
-                    "ALTER TABLE tether_konsole_pending ADD COLUMN target_pid TEXT"
-                )
-                pending_columns = {
-                    row["name"]: row
-                    for row in self._conn.execute("PRAGMA table_info(tether_konsole_pending)")
-                }
-            # SQLite cannot drop a NOT NULL constraint in place.  Rebuild legacy
-            # tables so terminal rows can express "no next attempt" truthfully.
-            if int(pending_columns["next_attempt_at"]["notnull"]) == 1:
-                self._conn.execute(
-                    "ALTER TABLE tether_konsole_pending RENAME TO tether_konsole_pending_v21"
+                    "ALTER TABLE tether_konsole_pending RENAME TO tether_konsole_pending_legacy"
                 )
                 self._conn.execute("""
                     CREATE TABLE tether_konsole_pending (
-                        handle TEXT NOT NULL, agent TEXT NOT NULL, line TEXT NOT NULL,
-                        attempts INTEGER NOT NULL DEFAULT 0,
-                        max_attempts INTEGER NOT NULL DEFAULT 8,
-                        interval_seconds INTEGER NOT NULL DEFAULT 20,
-                        next_attempt_at TEXT, status TEXT NOT NULL DEFAULT 'pending',
-                        target_pid TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        handle TEXT NOT NULL,
+                        agent TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending'
+                               CHECK(status IN ('pending', 'delivered')),
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
                         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                         PRIMARY KEY (handle, agent)
                     )
                 """)
                 self._conn.execute("""
                     INSERT INTO tether_konsole_pending
-                        (handle, agent, line, attempts, max_attempts, interval_seconds,
-                         next_attempt_at, status, target_pid, created_at, updated_at)
-                    SELECT handle, agent, line, attempts, max_attempts, interval_seconds,
-                           CASE WHEN status='pending' THEN next_attempt_at ELSE NULL END,
-                           status, target_pid, created_at, updated_at
-                    FROM tether_konsole_pending_v21
+                        (handle, agent, status, created_at, updated_at)
+                    SELECT handle, agent,
+                           CASE WHEN status='pending' THEN 'pending' ELSE 'delivered' END,
+                           created_at, updated_at
+                    FROM tether_konsole_pending_legacy
                 """)
-                self._conn.execute("DROP TABLE tether_konsole_pending_v21")
-            # Rows created before process pinning cannot prove which process they
-            # were intended for.  Keep the message unread, but retire prompt writes.
-            self._conn.execute("""
-                UPDATE tether_konsole_pending
-                SET status='target_changed', attempts=max_attempts,
-                    next_attempt_at=NULL, updated_at=datetime('now')
-                WHERE status='pending' AND target_pid IS NULL
-            """)
-            # Prompt text is durable data, so the sender-independent invariant
-            # must cover rows written by older binaries too.  Rebuild every
-            # stored line from validated routing metadata; never preserve or
-            # replay the legacy sender/subject-derived text.
-            for row in self._conn.execute(
-                "SELECT handle, agent, line FROM tether_konsole_pending"
-            ).fetchall():
-                try:
-                    safe_line = notice_line(
-                        to_agent=row["agent"],
-                        from_agent="",
-                        subject="",
-                        handle=row["handle"],
-                    )
-                except ValueError:
-                    safe_line = "# [Tether] legacy notification retired"
-                    self._conn.execute("""
-                        UPDATE tether_konsole_pending
-                        SET status='target_changed', attempts=max_attempts,
-                            next_attempt_at=NULL, updated_at=datetime('now')
-                        WHERE handle=? AND agent=?
-                    """, (row["handle"], row["agent"]))
-                if row["line"] != safe_line:
-                    self._conn.execute("""
-                        UPDATE tether_konsole_pending
-                        SET line=?, updated_at=datetime('now')
-                        WHERE handle=? AND agent=?
-                    """, (safe_line, row["handle"], row["agent"]))
-            # A terminal row is exhausted by definition.  Normalize old rows
-            # so future code cannot accidentally infer eligibility from a stale
-            # attempts counter even though the schedule is already null.
-            self._conn.execute("""
-                UPDATE tether_konsole_pending
-                SET attempts=max_attempts, next_attempt_at=NULL,
-                    updated_at=datetime('now')
-                WHERE status<>'pending'
-                  AND (attempts<>max_attempts OR next_attempt_at IS NOT NULL)
-            """)
+                self._conn.execute("DROP TABLE tether_konsole_pending_legacy")
+            # Cached Konsole identities were a source of stale-target writes.
+            self._conn.execute("DROP TABLE IF EXISTS tether_konsole_bindings")
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -515,7 +448,7 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         )
         self._conn.execute(
             "UPDATE tether_konsole_pending "
-            "SET status='acked', attempts=max_attempts, next_attempt_at=NULL, updated_at=? "
+            "SET status='delivered', updated_at=? "
             "WHERE handle=? AND agent=? AND status='pending'",
             (datetime.now(timezone.utc).isoformat(), handle, agent),
         )
@@ -743,36 +676,21 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         return [dict(r) for r in rows]
 
     def konsole_bind(self, agent: str, service: str, session: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "INSERT INTO tether_konsole_bindings (agent, service, session, bound_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(agent) DO UPDATE SET service=excluded.service, session=excluded.session, bound_at=excluded.bound_at",
-            (agent, service, session, now),
-        )
-        self._conn.commit()
+        """Deprecated no-op: delivery resolves live targets on every tick."""
 
     def konsole_unbind(self, agent: str) -> None:
-        self._conn.execute("DELETE FROM tether_konsole_bindings WHERE agent=?", (agent,))
-        self._conn.commit()
+        """Deprecated no-op retained for dashboard compatibility."""
 
     def konsole_binding(self, agent: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT agent, service, session, bound_at FROM tether_konsole_bindings WHERE agent=?",
-            (agent,),
-        ).fetchone()
-        return dict(row) if row else None
+        return None
 
     def konsole_bindings(self) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT agent, service, session, bound_at FROM tether_konsole_bindings"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return []
 
     def konsole_unbind_all(self) -> None:
         """Drop every konsole binding — used on dashboard startup before re-binding
         from live Konsole state (stale bindings point at closed tabs / dead PIDs)."""
-        self._conn.execute("DELETE FROM tether_konsole_bindings")
-        self._conn.commit()
+        return None
 
     def clear_ping_endpoints(self) -> None:
         """Wipe all ping endpoints. On a fresh dashboard launch every prior URL points
@@ -793,7 +711,7 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         self._conn.execute("DELETE FROM tether_presence")
         self._conn.commit()
 
-    # ── Konsole delivery ACK+retry queue (v2.1) ───────────────────────────────
+    # ── Minimal Konsole delivery queue ───────────────────────────────────────
 
     def is_read(self, handle: str, agent: str) -> bool:
         """Has `agent` read `handle`? This is the delivery ACK signal — a row lands
@@ -803,91 +721,73 @@ class SQLiteRuntime(TasksMixin, BoardMixin):
         ).fetchone()
         return row is not None
 
-    def konsole_pending_add(self, handle: str, agent: str, line: str,
-                            max_attempts: int = 3, interval_seconds: int = 30,
-                            *, target_pid: str | int) -> None:
-        """Register a delivery for confirm-and-retry. attempts=1 because the caller injects
-        once immediately; the loop takes over after `interval_seconds`. Delivery is normally
-        confirmed by reading the handle back off the agent's screen (see konsole_retry), so
-        `max_attempts` is only a safety BACKSTOP for a pathological never-landing inject —
-        not the primary stop. Re-registering the same (handle, agent) resets it to pending."""
-        now = datetime.now(timezone.utc)
-        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
+    def konsole_pending_add(self, handle: str, agent: str, *_args, **_kwargs) -> None:
+        """Queue exactly one durable delivery for ``(recipient, handle)``."""
+        now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             "INSERT INTO tether_konsole_pending "
-            "(handle, agent, line, attempts, max_attempts, interval_seconds, next_attempt_at, status, target_pid, created_at, updated_at) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, 'pending', ?, ?, ?) "
+            "(handle, agent, status, created_at, updated_at) "
+            "VALUES (?, ?, 'pending', ?, ?) "
             "ON CONFLICT(handle, agent) DO UPDATE SET "
-            "line=excluded.line, attempts=1, max_attempts=excluded.max_attempts, "
-            "interval_seconds=excluded.interval_seconds, next_attempt_at=excluded.next_attempt_at, "
-            "status='pending', target_pid=excluded.target_pid, updated_at=excluded.updated_at",
-            (handle, agent, line, max_attempts, interval_seconds, next_at, str(target_pid),
-             now.isoformat(), now.isoformat()),
+            "status='pending', updated_at=excluded.updated_at",
+            (handle, agent, now, now),
         )
         self._conn.commit()
 
     def konsole_pending_due(self, agent: str | None = None) -> list[dict]:
-        """Pending deliveries whose next attempt is due, optionally for one agent."""
-        now = datetime.now(timezone.utc).isoformat()
-        sql = (
-            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, "
-            "next_attempt_at, target_pid FROM tether_konsole_pending "
-            "WHERE status='pending' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?"
-        )
-        params: tuple[str, ...] = (now,)
+        """Return at most the oldest pending handle for each recipient."""
+        sql = """
+            SELECT handle, agent, status, created_at, updated_at
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY agent ORDER BY created_at, handle
+                ) AS queue_position
+                FROM tether_konsole_pending
+                WHERE status='pending'
+            )
+            WHERE queue_position=1
+        """
+        params: tuple[str, ...] = ()
         if agent is not None:
             sql += " AND agent=?"
-            params = (now, agent)
-        sql += " ORDER BY next_attempt_at, created_at"
+            params = (agent,)
+        sql += " ORDER BY agent"
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     def konsole_pending_get(self, handle: str, agent: str) -> dict | None:
         row = self._conn.execute(
-            "SELECT handle, agent, line, attempts, max_attempts, interval_seconds, "
-            "next_attempt_at, status, target_pid FROM tether_konsole_pending WHERE handle=? AND agent=?",
+            "SELECT handle, agent, status, created_at, updated_at "
+            "FROM tether_konsole_pending WHERE handle=? AND agent=?",
             (handle, agent),
         ).fetchone()
         return dict(row) if row else None
 
     def konsole_pending_defer(self, handle: str, agent: str, interval_seconds: int) -> None:
-        """Keep an already-injected delivery pending without counting a retry.
-
-        A direct Konsole wake has placed the exact notice into Cursor's
-        follow-up UI, but a busy prompt cannot safely receive Enter.  That is
-        not a second delivery attempt: it must simply become due soon enough
-        for the detached exact-handle waiter to submit it after idle.  Keeping
-        this operation distinct from ``konsole_pending_mark_attempt`` preserves
-        the retry budget for actual re-injections.
-        """
-        if interval_seconds < 0:
-            raise ValueError("interval_seconds must be non-negative")
-        now = datetime.now(timezone.utc)
-        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
-        self._conn.execute(
-            "UPDATE tether_konsole_pending SET next_attempt_at=?, status='pending', updated_at=? "
-            "WHERE handle=? AND agent=? AND status='pending'",
-            (next_at, now.isoformat(), handle, agent),
-        )
-        self._conn.commit()
+        """Compatibility no-op: pending work is retried by the next poll tick."""
 
     def konsole_pending_mark_attempt(self, handle: str, agent: str, interval_seconds: int) -> None:
-        """Record a re-injection: bump attempts, schedule the next nudge."""
-        now = datetime.now(timezone.utc)
-        next_at = (now + timedelta(seconds=interval_seconds)).isoformat()
+        """Compatibility no-op: attempt budgets no longer exist."""
+
+    def konsole_pending_resolve(self, handle: str, agent: str, status: str) -> None:
+        """Mark a queued delivery delivered; terminal sub-states no longer exist."""
         self._conn.execute(
-            "UPDATE tether_konsole_pending SET attempts=attempts+1, next_attempt_at=?, updated_at=? "
-            "WHERE handle=? AND agent=? AND status='pending'",
-            (next_at, now.isoformat(), handle, agent),
+            "UPDATE tether_konsole_pending SET status='delivered', updated_at=? "
+            "WHERE handle=? AND agent=?",
+            (datetime.now(timezone.utc).isoformat(), handle, agent),
         )
         self._conn.commit()
 
-    def konsole_pending_resolve(self, handle: str, agent: str, status: str) -> None:
-        """Close out a delivery: 'acked' (recipient read it) or 'exhausted' (gave up)."""
+    def delivery_is_paused(self) -> bool:
+        row = self._conn.execute(
+            "SELECT paused FROM tether_delivery_control WHERE singleton=1"
+        ).fetchone()
+        return bool(row and row["paused"])
+
+    def delivery_set_paused(self, paused: bool, reason: str | None = None) -> None:
         self._conn.execute(
-            "UPDATE tether_konsole_pending SET status=?, attempts=max_attempts, next_attempt_at=NULL, updated_at=? "
-            "WHERE handle=? AND agent=?",
-            (status, datetime.now(timezone.utc).isoformat(), handle, agent),
+            "UPDATE tether_delivery_control SET paused=?, reason=?, updated_at=? WHERE singleton=1",
+            (int(paused), reason, datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
 

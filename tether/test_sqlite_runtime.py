@@ -149,32 +149,22 @@ def test_ping_url_set_get_and_toggle(rt: SQLiteRuntime) -> None:
     assert rt.get_ping_url("codex") is None
 
 
-def test_konsole_pending_defer_preserves_initial_attempt(rt: SQLiteRuntime) -> None:
-    rt.konsole_pending_add(
-        "h&l_messages_defer", "cursor", "notice", interval_seconds=90, target_pid=42
-    )
-    before = rt._conn.execute(
-        "SELECT attempts, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
-        ("h&l_messages_defer", "cursor"),
-    ).fetchone()
-    rt.konsole_pending_defer("h&l_messages_defer", "cursor", interval_seconds=0)
-    after = rt._conn.execute(
-        "SELECT attempts, status FROM tether_konsole_pending WHERE handle=? AND agent=?",
-        ("h&l_messages_defer", "cursor"),
-    ).fetchone()
-    assert before["attempts"] == after["attempts"] == 1
-    assert after["status"] == "pending"
+def test_konsole_pending_has_only_delivery_state(rt: SQLiteRuntime) -> None:
+    rt.konsole_pending_add("h&l_messages_defer", "cursor")
+    columns = [row["name"] for row in rt._conn.execute(
+        "PRAGMA table_info(tether_konsole_pending)"
+    )]
+    assert columns == ["handle", "agent", "status", "created_at", "updated_at"]
+    assert rt.konsole_pending_get("h&l_messages_defer", "cursor")["status"] == "pending"
 
 
 def test_konsole_terminal_delivery_has_no_retry_schedule(rt: SQLiteRuntime) -> None:
     handle = "h&l_messages_terminal"
-    rt.konsole_pending_add(handle, "cursor", "notice", interval_seconds=0, target_pid=42)
-    assert rt.konsole_pending_due()[0]["target_pid"] == "42"
+    rt.konsole_pending_add(handle, "cursor")
+    assert rt.konsole_pending_due()[0]["handle"] == handle
     rt.konsole_pending_resolve(handle, "cursor", "delivered")
     row = rt.konsole_pending_get(handle, "cursor")
     assert row["status"] == "delivered"
-    assert row["next_attempt_at"] is None
-    assert row["attempts"] == row["max_attempts"]
     assert rt.konsole_pending_due() == []
 
 
@@ -184,15 +174,13 @@ def test_mark_read_atomically_acks_matching_pending_delivery(rt: SQLiteRuntime) 
         {"from": "cursor", "to": "claude", "subject": "done", "text": "read me"},
         owner="claude",
     )
-    rt.konsole_pending_add(handle, "claude", "safe notice", interval_seconds=0, target_pid=42)
+    rt.konsole_pending_add(handle, "claude")
 
     rt.resolve(handle, for_agent="claude")
 
     row = rt.konsole_pending_get(handle, "claude")
     assert rt.is_read(handle, "claude")
-    assert row["status"] == "acked"
-    assert row["attempts"] == row["max_attempts"]
-    assert row["next_attempt_at"] is None
+    assert row["status"] == "delivered"
 
 
 def test_due_query_can_be_scoped_to_one_agent(rt: SQLiteRuntime) -> None:
@@ -202,7 +190,7 @@ def test_due_query_can_be_scoped_to_one_agent(rt: SQLiteRuntime) -> None:
             {"from": "codex", "to": agent, "subject": agent, "text": "pending"},
             owner=agent,
         )
-        rt.konsole_pending_add(handle, agent, "safe notice", interval_seconds=0, target_pid=42)
+        rt.konsole_pending_add(handle, agent)
 
     rows = rt.konsole_pending_due(agent="claude")
 
@@ -239,42 +227,39 @@ def test_legacy_pending_migration_is_concurrency_safe(tmp_path: Path) -> None:
     runtime = SQLiteRuntime(db_path=db_path)
     try:
         row = runtime.konsole_pending_get("h&l_messages_legacy", "cursor")
-        assert row["status"] == "target_changed"
-        assert row["next_attempt_at"] is None
-        assert row["attempts"] == row["max_attempts"]
-        assert row["line"] == (
-            "# [Tether] resolve h&l_messages_legacy --agent cursor"
-        )
-        assert runtime.konsole_pending_due() == []
+        assert row["status"] == "pending"
+        assert runtime.konsole_pending_due()[0]["handle"] == "h&l_messages_legacy"
+        columns = [item["name"] for item in runtime._conn.execute(
+            "PRAGMA table_info(tether_konsole_pending)"
+        )]
+        assert columns == ["handle", "agent", "status", "created_at", "updated_at"]
     finally:
         runtime.close()
 
 
-def test_existing_legacy_lines_are_sanitized_even_when_terminal(tmp_path: Path) -> None:
+def test_legacy_payload_lines_are_deleted_by_migration(tmp_path: Path) -> None:
     db_path = str(tmp_path / "legacy-lines.db")
-    runtime = SQLiteRuntime(db_path=db_path)
-    runtime._conn.execute(
-        "INSERT INTO tether_konsole_pending "
-        "(handle, agent, line, attempts, max_attempts, interval_seconds, "
-        "next_attempt_at, status, target_pid, created_at, updated_at) "
-        "VALUES (?, ?, ?, 1, 3, 30, NULL, 'delivered', NULL, datetime('now'), datetime('now'))",
-        (
-            "h&l_messages_oldline",
-            "claude",
-            "[Tether] New message from attacker: touch /tmp/owned",
-        ),
+    connection = sqlite3.connect(db_path)
+    connection.execute("""
+        CREATE TABLE tether_konsole_pending (
+            handle TEXT, agent TEXT, line TEXT, attempts INTEGER,
+            max_attempts INTEGER, interval_seconds INTEGER, next_attempt_at TEXT,
+            status TEXT, target_pid TEXT, created_at TEXT, updated_at TEXT,
+            PRIMARY KEY(handle, agent)
+        )
+    """)
+    connection.execute(
+        "INSERT INTO tether_konsole_pending VALUES (?,?,?,1,3,30,NULL,'delivered',NULL,'now','now')",
+        ("h&l_messages_oldline", "claude", "touch /tmp/owned"),
     )
-    runtime._conn.commit()
-    runtime.close()
+    connection.commit()
+    connection.close()
 
     migrated = SQLiteRuntime(db_path=db_path)
     try:
         row = migrated.konsole_pending_get("h&l_messages_oldline", "claude")
-        assert row["line"] == (
-            "# [Tether] resolve h&l_messages_oldline --agent claude"
-        )
-        assert row["attempts"] == row["max_attempts"] == 3
-        assert row["next_attempt_at"] is None
+        assert row["status"] == "delivered"
+        assert "line" not in row
     finally:
         migrated.close()
 

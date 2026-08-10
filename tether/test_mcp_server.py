@@ -50,7 +50,7 @@ def test_tree_round_trip(server) -> None:
 
 
 def test_send_offers_delivery_without_http_endpoint(server, monkeypatch) -> None:
-    monkeypatch.setattr("tether.delivery._live_konsole_target", lambda *_: None)
+    monkeypatch.setattr("tether.delivery_worker.ensure_started", lambda _db: None)
     sent = asyncio.run(
         server.call_tool(
             "tether_send",
@@ -84,7 +84,7 @@ def test_resolve_records_recipient_read_receipt(server) -> None:
     )
     assert json.loads(resolved[0].text)["subject"] == "audit"
     assert server.runtime.is_read(handle, "codex")
-    assert server.runtime.konsole_pending_get(handle, "codex")["status"] == "acked"
+    assert server.runtime.konsole_pending_get(handle, "codex")["status"] == "delivered"
 
 
 def test_resolve_uses_pinned_mcp_agent_identity(server, monkeypatch) -> None:

@@ -311,43 +311,32 @@ def inject_tether_notice(
     expected_agent: str,
     expected_pid: str | int | None = None,
 ) -> tuple[bool, str]:
-    """Inject a Tether notice without clobbering a human-authored draft.
+    """Submit one inert notice only when the recipient is positively idle.
 
-    Empty, recognised prompts receive a normal submitted instruction so an idle
-    agent wakes and can retrieve the durable handle.  A non-empty or unknown
-    prompt receives the same text with no Enter, leaving Matt's current draft in
-    control.  The caller gets both the D-Bus result and the observed state for
-    diagnostics and tests.
+    Busy, drafted, and unknown composers receive *zero bytes*.  This is the
+    transport's central safety invariant: sender-controlled input must never be
+    appended to a human draft or typed into a shell while identity is uncertain.
     """
     if not session_agent_is_live(
         service, session, expected_agent, expected_pid=expected_pid
     ):
         return False, "wrong_target"
     state = prompt_state(service, session)
-    # Never combine notice bytes and Enter in one optimistic operation.  Even
-    # after an empty observation, Matt can begin typing before qdbus runs.  Put
-    # down the notice first, then prove that the current composer contains only
-    # that exact text before sending Enter.
+    if state != "empty":
+        return False, state
+
+    # Observe a stable empty prompt twice.  Then send the inert comment and
+    # newline in one D-Bus operation so there is no half-written notice waiting
+    # for a later worker to press Enter.
+    time.sleep(0.12)
     if not session_agent_is_live(
         service, session, expected_agent, expected_pid=expected_pid
     ):
         return False, "wrong_target"
-    ok = send_line(service, session, text, submit=False)
-    if not ok or state != "empty":
-        return ok, state
-    time.sleep(0.12)
-    composer = current_composer_text(service, session)
-    normalize = lambda value: " ".join((value or "").split())
-    if normalize(composer) != normalize(text):
-        # D-Bus accepted the bytes, but ownership is not proven.  Treat the
-        # result conservatively so every caller holds/retries instead of firing.
-        observed = prompt_state(service, session)
-        return True, observed if observed != "empty" else "unknown"
-    if not session_agent_is_live(
-        service, session, expected_agent, expected_pid=expected_pid
-    ):
-        return True, "target_changed"
-    return send_line(service, session, "\r", submit=False), "empty"
+    second_state = prompt_state(service, session)
+    if second_state != "empty":
+        return False, second_state
+    return send_line(service, session, text + "\r", submit=False), "empty"
 
 
 def set_title(service: str, session: str, title: str) -> bool:
