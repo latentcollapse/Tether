@@ -44,3 +44,15 @@ def test_dialog_footer_variants_trigger() -> None:
         "Esc to go back",
     ):
         assert _screen_is_modal_dialog("x\n" + footer) is True, footer
+
+
+def test_concatenated_notices_are_not_a_wake() -> None:
+    # 2026-08-23: prompt_state prefix-matched "# [Tether] resolve " so a pile of
+    # stranded notices classified "empty" and every pass appended another copy
+    # (up to 40). The wake pattern must fullmatch a SINGLE notice.
+    from tether.konsole_driver import _is_tether_wake
+
+    single = "# [Tether] resolve h&l_messages_aaa_bbb --agent claude"
+    assert _is_tether_wake(single)
+    assert not _is_tether_wake(single + single)
+    assert not _is_tether_wake(single + " user text")

@@ -41,6 +41,14 @@ _QDBUS = _find_qdbus()
 # for longer than the former 250 ms single check.  Keep polling briefly so a
 # successful submission is not mistaken for an unsent notice and duplicated.
 _SUBMIT_CONFIRM_POLLS = 20
+# Post-inject ownership confirmation. A running TUI repaints continuously
+# (spinners); a single getAllDisplayedText read can race the repaint and miss
+# text that WAS just injected — observed 2026-08-23 as three consecutive
+# "ownership_lost" failures against Claude Code mid-turn, each stranding the
+# notice in the composer where the next injection concatenated onto it.
+# Poll instead of single-shot, mirroring _SUBMIT_CONFIRM_POLLS.
+_OWNERSHIP_CONFIRM_POLLS = 10
+_OWNERSHIP_CONFIRM_INTERVAL_SECONDS = 0.15
 _SUBMIT_CONFIRM_INTERVAL_SECONDS = 0.15
 _COMPOSER_SETTLE_SECONDS = 0.4
 _TETHER_WAKE_RE = re.compile(
@@ -283,7 +291,7 @@ def prompt_state(service: str, session: str) -> str:
             # a human may legitimately type that word into a real draft.
             if suffix.startswith("[Tether] New message from "):
                 return "empty"
-            if suffix.startswith("# [Tether] resolve "):
+            if suffix.startswith("# [Tether] resolve ") and _is_tether_wake(suffix):
                 return "empty"
             if suffix:
                 return "draft"
@@ -323,7 +331,7 @@ def prompt_state(service: str, session: str) -> str:
                 return "empty"
             if suffix.startswith("[Tether from "):
                 return "empty"
-            if suffix.startswith("# [Tether] resolve "):
+            if suffix.startswith("# [Tether] resolve ") and _is_tether_wake(suffix):
                 return "empty"
             return "draft"
 
@@ -395,15 +403,36 @@ def inject_tether_notice(
     # A leading space keeps a held notice distinct from the human's last word
     # without synthesising a newline, which some TUIs interpret as submission.
     notice = text if state == "empty" else f" {text}"
+    if state == "empty":
+        # The state gate says empty, but verify against the actual composer:
+        # a stranded notice from a previous failed pass may still sit there
+        # (observed 2026-08-23: prompt_state's prefix match classified a
+        # concatenated notice pile as "empty" and each new pass appended
+        # another copy — up to 40).  Submit a PURE stranded notice so the
+        # recipient still receives it, then deliver into the clean composer;
+        # anything else in the composer is a misclassified draft — fail closed.
+        existing = " ".join((current_composer_text(service, session) or "").split())
+        if existing:
+            if _TETHER_WAKE_RE.fullmatch(existing):
+                if not send_line(service, session, "\r", submit=False):
+                    return False, "send_failed"
+                for _ in range(_SUBMIT_CONFIRM_POLLS):
+                    if not current_composer_text(service, session):
+                        break
+                    time.sleep(_SUBMIT_CONFIRM_INTERVAL_SECONDS)
+                else:
+                    return False, "composer_busy"
+            else:
+                return False, "composer_busy"
     if not send_line(service, session, notice, submit=False):
         return False, "send_failed"
     handle = next((part for part in text.split() if part.startswith("h&l_")), "")
-    if not handle or not composer_contains(service, session, handle):
+    if not handle or not _wait_composer_contains(service, session, handle):
         return False, "ownership_lost"
     if state == "draft":
         return True, "draft"
     time.sleep(0.12)
-    if not composer_is_tether_owned(service, session, handle):
+    if not _wait_tether_owned(service, session, handle):
         # A human began typing between insertion and Enter.  The notice landed,
         # but its submission now belongs to that human rather than Tether.
         if prompt_state(service, session) == "draft" and composer_contains(service, session, handle):
@@ -443,7 +472,7 @@ def submit_owned_tether_notice(
         service, session, expected_agent, expected_pid=expected_pid
     ):
         return False, "wrong_target"
-    if not composer_is_tether_owned(service, session, handle):
+    if not _wait_tether_owned(service, session, handle):
         return False, "not_owned"
 
     screen = get_displayed_text(service, session)
@@ -542,6 +571,27 @@ def current_composer_text(service: str, session: str) -> str | None:
             break
         pieces.append(stripped)
     return " ".join(pieces)
+
+
+def _wait_composer_contains(service: str, session: str, needle: str) -> bool:
+    """Poll composer_contains briefly — a live TUI repaint can hide just-typed text."""
+    for i in range(_OWNERSHIP_CONFIRM_POLLS):
+        if composer_contains(service, session, needle):
+            return True
+        time.sleep(_OWNERSHIP_CONFIRM_INTERVAL_SECONDS)
+    return False
+
+
+def _wait_tether_owned(service: str, session: str, handle: str) -> bool:
+    """Poll composer_is_tether_owned; contains-but-not-owned fails fast (human text)."""
+    for i in range(_OWNERSHIP_CONFIRM_POLLS):
+        if composer_is_tether_owned(service, session, handle):
+            return True
+        composer = current_composer_text(service, session)
+        if composer is not None and handle in composer:
+            return False  # visible but not a pure notice — genuinely not ours
+        time.sleep(_OWNERSHIP_CONFIRM_INTERVAL_SECONDS)
+    return False
 
 
 def composer_contains(service: str, session: str, needle: str) -> bool:
