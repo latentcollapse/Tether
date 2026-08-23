@@ -36,6 +36,23 @@ def _find_qdbus() -> str | None:
 
 _QDBUS = _find_qdbus()
 
+# A terminal TUI can consume Enter before Konsole repaints its viewport.  In
+# particular, Antigravity accepted the key while its old prompt remained visible
+# for longer than the former 250 ms single check.  Keep polling briefly so a
+# successful submission is not mistaken for an unsent notice and duplicated.
+_SUBMIT_CONFIRM_POLLS = 20
+_SUBMIT_CONFIRM_INTERVAL_SECONDS = 0.15
+_COMPOSER_SETTLE_SECONDS = 0.4
+_TETHER_WAKE_RE = re.compile(
+    r"# \[Tether\] resolve h&l_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+ "
+    r"--agent [A-Za-z0-9_-]+"
+)
+
+
+def _is_tether_wake(text: str) -> bool:
+    """Whether text is exactly the inert prompt line owned by Tether."""
+    return _TETHER_WAKE_RE.fullmatch(text) is not None
+
 
 def available() -> bool:
     return _QDBUS is not None
@@ -140,6 +157,8 @@ def process_agent(session: dict, registry: list[dict]) -> str | None:
         aid = a["id"].lower()
         if aid == proc or aid == cmd_exe or aid in cmd_tokens:
             return a["id"]
+        if aid == "pi" and ("coding-agent" in cmd_tokens or "pi-mono" in cmdline):
+            return a["id"]
     return None
 
 
@@ -190,8 +209,30 @@ def send_line(service: str, session: str, text: str, submit: bool = True) -> boo
     return True
 
 
+_MODAL_DIALOG_RE = re.compile(
+    r"esc to (?:cancel|close|dismiss|exit|go back|return)", re.IGNORECASE
+)
+
+
+def _screen_is_modal_dialog(screen: str) -> bool:
+    """True when the viewport bottom shows a modal dialog, not the agent composer.
+
+    Modal overlays (Claude Code /feedback, confirmation prompts, ...) replace the
+    composer with their own input box.  Two failure modes observed 2026-08-23:
+    prompt_state then matched a STALE transcript prompt line above the overlay
+    (classifying the screen "empty" while Matt's dialog draft was live), and
+    current_composer_text's separator-box heuristic read the dialog box itself
+    as the composer — so the waker typed notices INTO the dialog.  Both are
+    fixed by failing closed: a dialog screen is "unknown"/None and delivery
+    simply waits.  Detection is anchored to the last few non-empty lines so
+    transcript text that merely mentions e.g. "Esc to cancel" cannot trigger it.
+    """
+    bottom = [ln.strip() for ln in screen.splitlines()[-12:] if ln.strip()]
+    return any(_MODAL_DIALOG_RE.search(ln) for ln in bottom)
+
+
 def prompt_state(service: str, session: str) -> str:
-    """Classify the visible agent input as ``empty``, ``draft``, ``busy``, or ``unknown``.
+    """Classify the visible agent input as ``empty``, ``draft``, or ``unknown``.
 
     Konsole exposes text but not an input-buffer API.  The three supported agent
     TUIs do expose stable empty-prompt placeholders, though.  We only auto-submit
@@ -204,6 +245,8 @@ def prompt_state(service: str, session: str) -> str:
     """
     screen = get_displayed_text(service, session)
     if not screen:
+        return "unknown"
+    if _screen_is_modal_dialog(screen):
         return "unknown"
 
     # Agent activity does not make the composer unsafe.  An empty follow-up box
@@ -254,6 +297,8 @@ def prompt_state(service: str, session: str) -> str:
                 "Run /review on my current changes",
             }:
                 return "empty"
+            if _is_tether_wake(suffix):
+                return "empty"
             if suffix:
                 return "draft"
 
@@ -282,10 +327,12 @@ def prompt_state(service: str, session: str) -> str:
                 return "empty"
             return "draft"
 
-        # Pi coding agent: prompt line begins with > or shows openrouter model bar
+        # Antigravity/Gemini and Pi coding agent: prompt line begins with >.
         if line.startswith(">") or "openrouter/" in line or "Ask it how to use or extend Pi" in line:
             suffix = line[1:].strip() if line.startswith(">") else line.strip()
             if not suffix or "openrouter/" in line or "Ask it" in line:
+                return "empty"
+            if _is_tether_wake(suffix):
                 return "empty"
             return "draft"
 
@@ -297,16 +344,13 @@ def prompt_state(service: str, session: str) -> str:
 
 
 def agent_accepts_delivery_now(service: str, session: str, agent: str) -> bool:
-    """Whether this TUI can safely *submit* its current empty composer now."""
-    screen = get_displayed_text(service, session)
-    low = screen.lower()
-    # Codex explicitly supports Tab-to-queue during an active turn. Cursor and
-    # Claude do not expose a reliably injectable active-turn submit key through
-    # Konsole D-Bus, so wait for their turn to finish rather than leaving text.
-    if agent == "cursor" and "ctrl+c to stop" in low:
-        return False
-    if agent == "claude" and "esc to interrupt" in low:
-        return False
+    """Whether the current composer is empty enough for automatic submission.
+
+    An active turn is not a human draft.  Claude and Cursor both provide a
+    follow-up composer while working, and submitting a Tether wake there is the
+    supported way to queue the next instruction.  Only visible user text blocks
+    Enter.
+    """
     return prompt_state(service, session) == "empty"
 
 
@@ -318,34 +362,52 @@ def inject_tether_notice(
     expected_agent: str,
     expected_pid: str | int | None = None,
 ) -> tuple[bool, str]:
-    """Submit one inert notice only when the recipient is positively idle.
+    """Place one inert notice and submit it unless a human draft is visible.
 
-    Busy, drafted, and unknown composers receive *zero bytes*.  This is the
-    transport's central safety invariant: sender-controlled input must never be
-    appended to a human draft or typed into a shell while identity is uncertain.
+    A supported agent may be working while its follow-up composer is empty; that
+    remains safe to submit.  A visible draft is different: append a marked
+    notice without Enter, so the person sees it and keeps control of submission.
+    Unknown screens remain fail-closed because Konsole has no input-buffer API.
     """
     if not session_agent_is_live(
         service, session, expected_agent, expected_pid=expected_pid
     ):
         return False, "wrong_target"
     state = prompt_state(service, session)
-    if state != "empty":
+    if state not in {"empty", "draft"}:
         return False, state
 
-    # Observe a stable empty prompt twice before placing the inert line.
-    time.sleep(0.12)
+    if state == "empty":
+        # Observe an empty prompt twice before taking responsibility for Enter.
+        time.sleep(0.12)
+        if not session_agent_is_live(
+            service, session, expected_agent, expected_pid=expected_pid
+        ):
+            return False, "wrong_target"
+        state = prompt_state(service, session)
+        if state not in {"empty", "draft"}:
+            return False, state
+
     if not session_agent_is_live(
         service, session, expected_agent, expected_pid=expected_pid
     ):
         return False, "wrong_target"
-    second_state = prompt_state(service, session)
-    if second_state != "empty":
-        return False, second_state
-    if not send_line(service, session, text, submit=False):
+    # A leading space keeps a held notice distinct from the human's last word
+    # without synthesising a newline, which some TUIs interpret as submission.
+    notice = text if state == "empty" else f" {text}"
+    if not send_line(service, session, notice, submit=False):
         return False, "send_failed"
-    time.sleep(0.12)
     handle = next((part for part in text.split() if part.startswith("h&l_")), "")
-    if not handle or not composer_is_tether_owned(service, session, handle):
+    if not handle or not composer_contains(service, session, handle):
+        return False, "ownership_lost"
+    if state == "draft":
+        return True, "draft"
+    time.sleep(0.12)
+    if not composer_is_tether_owned(service, session, handle):
+        # A human began typing between insertion and Enter.  The notice landed,
+        # but its submission now belongs to that human rather than Tether.
+        if prompt_state(service, session) == "draft" and composer_contains(service, session, handle):
+            return True, "draft"
         return False, "ownership_lost"
     return submit_owned_tether_notice(
         service,
@@ -372,16 +434,29 @@ def submit_owned_tether_notice(
     if not composer_is_tether_owned(service, session, handle):
         return False, "not_owned"
 
+    # Konsole can paint the inserted text before the TUI has finished consuming
+    # it.  Recheck after a short measured settle before pressing Enter: this
+    # avoids losing Gemini's submit byte and also gives a human draft a chance to
+    # revoke Tether ownership.
+    time.sleep(_COMPOSER_SETTLE_SECONDS)
+    if not session_agent_is_live(
+        service, session, expected_agent, expected_pid=expected_pid
+    ):
+        return False, "wrong_target"
+    if not composer_is_tether_owned(service, session, handle):
+        return False, "not_owned"
+
     screen = get_displayed_text(service, session)
     # Codex uses Tab to queue a follow-up while a turn is active. Enter merely
     # leaves the text in its composer. Other supported TUIs submit with Enter.
     submit_key = "\t" if expected_agent == "codex" and "tab to queue message" in screen.lower() else "\r"
     if not send_line(service, session, submit_key, submit=False):
         return False, "submit_failed"
-    time.sleep(0.25)
-    if composer_contains(service, session, handle):
-        return False, "not_submitted"
-    return True, "empty"
+    for _ in range(_SUBMIT_CONFIRM_POLLS):
+        if not composer_contains(service, session, handle):
+            return True, "empty"
+        time.sleep(_SUBMIT_CONFIRM_INTERVAL_SECONDS)
+    return False, "not_submitted"
 
 
 def set_title(service: str, session: str, title: str) -> bool:
@@ -413,6 +488,8 @@ def current_composer_text(service: str, session: str) -> str | None:
     screen = get_displayed_text(service, session)
     if not screen:
         return None
+    if _screen_is_modal_dialog(screen):
+        return None
     lines = screen.splitlines()[-100:]
     marker_index = None
     first = ""
@@ -423,6 +500,18 @@ def current_composer_text(service: str, session: str) -> str | None:
             first = stripped[1:].replace("\xa0", " ").strip()
             break
     if marker_index is None:
+        sep_indices = [
+            i for i, ln in enumerate(lines)
+            if ln.strip() and set(ln.strip()) <= {"─", "━", "-", "=", "▄", "▀", "▁", "▔"}
+        ]
+        if len(sep_indices) >= 2:
+            top_sep = sep_indices[-2]
+            bot_sep = sep_indices[-1]
+            if bot_sep > top_sep:
+                box_lines = [lines[i].strip() for i in range(top_sep + 1, bot_sep) if lines[i].strip()]
+                if box_lines:
+                    return " ".join(box_lines)
+                return ""
         return None
 
     # A wrapped composer begins on the marker line.  Only collect continuation
