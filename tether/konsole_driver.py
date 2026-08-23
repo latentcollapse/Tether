@@ -414,6 +414,9 @@ def inject_tether_notice(
         existing = " ".join((current_composer_text(service, session) or "").split())
         if existing:
             if _TETHER_WAKE_RE.fullmatch(existing):
+                existing_handle = next(
+                    (p for p in existing.split() if p.startswith("h&l_")), ""
+                )
                 if not send_line(service, session, "\r", submit=False):
                     return False, "send_failed"
                 for _ in range(_SUBMIT_CONFIRM_POLLS):
@@ -422,6 +425,13 @@ def inject_tether_notice(
                     time.sleep(_SUBMIT_CONFIRM_INTERVAL_SECONDS)
                 else:
                     return False, "composer_busy"
+                if existing_handle and existing_handle == handle:
+                    # The stranded notice IS this message — a retry after a
+                    # submit-confirm timeout falsely marked it failed. It is
+                    # now submitted; typing again would double-send it
+                    # (observed 2026-08-23: two identical resolves of the same
+                    # handle). Exactly-once means stop here.
+                    return True, "resubmitted"
             else:
                 return False, "composer_busy"
     if not send_line(service, session, notice, submit=False):

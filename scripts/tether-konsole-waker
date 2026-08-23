@@ -1,0 +1,382 @@
+#!/home/mattc/.local/share/tether/venv/bin/python
+"""tether-konsole-waker — the BACKEND delivery path for Tether wakes.
+
+**Policy (Matt, 2026-08-07): the backend is the contract; the dashboard is quarantined.**
+`tether-dashboard.service` is stopped/disabled and its `/api/konsole/deliver` ping URLs are
+disabled in `tether_ping_endpoints`. Agent-to-agent relay must work with no Node process
+and no web UI in the path — this script plus `tether.konsole_driver` IS that path.
+
+What it does, each poll:
+  1. Re-derive konsole bindings from live sessions (`guess_agent`). Konsole's D-Bus name is
+     PID-based, so every konsole restart orphans stored bindings and silently kills the wake
+     path. Self-healing here is what removes the recurring "linking headaches".
+  2. For each unread message addressed to a bound agent, check `prompt_state` FIRST and inject
+     only into an `empty` composer — never a running turn, never over a human draft.
+  3. Type the notice and submit it exactly once. Outcome is final either way: the message is
+     durable in SQLite and visible on screen, so a missed submit costs one turn of latency,
+     never a lost message. (An earlier revision retried submission every poll, which re-sent
+     CR/LF into live prompts — the phantom-newline bug. Do not reintroduce retry-on-submit.)
+
+Idempotent via `tether_konsole_delivered`: a message is typed at most once, across restarts.
+Backfill runs only on a genuinely fresh ledger, so a restart never swallows pending work.
+
+    tether-konsole-waker            # run in foreground
+    tether-konsole-waker --once     # single pass, for testing
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+import time
+
+from tether import konsole_driver
+from tether.delivery import notice_line
+
+DB = "/home/mattc/.local/share/tether/postoffice.db"
+# Bindings live HERE, not in postoffice.db: tether's sqlite_runtime drops
+# tether_konsole_bindings on every schema init (stale-target protection), so any
+# bindings row in the shared DB is destroyed by the next CLI call. The waker
+# re-derives bindings from live Konsole every pass anyway; this file is only
+# cross-restart memory. (2026-08-23, Ox — was the recurring "no such table".)
+BINDINGS_DB = "/home/mattc/.local/share/tether/konsole-waker-state.db"
+AGENTS_JSON = "/home/mattc/.config/tether/agents.json"
+POLL_SECONDS = 5.0
+
+
+def _conn() -> sqlite3.Connection:
+    c = sqlite3.connect(DB, timeout=10.0)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def _ensure_schema(c: sqlite3.Connection) -> bool:
+    """Create the ledger if absent. Returns True on first-ever creation."""
+    fresh = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tether_konsole_delivered'"
+    ).fetchone() is None
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS tether_konsole_delivered ("
+        " handle TEXT PRIMARY KEY,"
+        " agent TEXT NOT NULL,"
+        " delivered_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        " result TEXT,"
+        " typed INTEGER NOT NULL DEFAULT 1,"
+        " terminal INTEGER NOT NULL DEFAULT 1,"
+        " attempts INTEGER NOT NULL DEFAULT 1)"
+    )
+    # `_rebind` writes here every pass; without this DDL the loop dies on any DB
+    # that predates the bindings table (postoffice.db did — 2026-08-23).
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS tether_konsole_bindings ("
+        " agent TEXT PRIMARY KEY,"
+        " service TEXT NOT NULL,"
+        " session TEXT NOT NULL,"
+        " bound_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    c.commit()
+    return fresh
+
+
+def _bindings(c: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    return {r["agent"]: r for r in c.execute("SELECT * FROM tether_konsole_bindings")}
+
+
+def _registry() -> list[dict]:
+    """Agents from `~/.config/tether/agents.json`, shaped for `guess_agent`."""
+    try:
+        with open(AGENTS_JSON) as f:
+            d = json.load(f)
+    except Exception:
+        return []
+    items = d.get("agents", d) if isinstance(d, dict) else d
+    if isinstance(items, dict):
+        items = list(items.values())
+    if not isinstance(items, list):
+        return []
+    return [a for a in items if isinstance(a, dict) and a.get("id")]
+
+
+def _rebind(c: sqlite3.Connection, bc: sqlite3.Connection) -> None:
+    """Self-heal bindings against the live Konsole.
+
+    Konsole's D-Bus name is PID-based (`org.kde.konsole-1811`), so every restart
+    orphans every binding and the wake path dies silently — the failure that made
+    this whole mechanism look broken. Re-derive bindings each pass from the live
+    sessions instead of trusting stored rows.
+    """
+    reg = _registry()
+    if not reg:
+        return
+    live_services = set(konsole_driver.konsole_services())
+    if not live_services:
+        return
+
+    seen: dict[str, tuple[str, str]] = {}
+    for s in konsole_driver.list_sessions():
+        if s.get("ambiguous"):
+            continue  # tmux in the foreground hides the real agent
+        agent = konsole_driver.guess_agent(s, reg)
+        if agent and agent not in seen:
+            seen[agent] = (s["service"], s["session"])
+
+    cur = {a: (b["service"], b["session"]) for a, b in _bindings(bc).items()}
+    for agent, (svc, sess) in seen.items():
+        if cur.get(agent) != (svc, sess):
+            bc.execute(
+                "INSERT OR REPLACE INTO tether_konsole_bindings(agent,service,session,bound_at)"
+                " VALUES (?,?,?,datetime('now'))",
+                (agent, svc, sess),
+            )
+            print(f"rebound {agent} -> {svc} {sess}", flush=True)
+
+    # Drop rows whose Konsole is gone, so a stale PID never shadows a live tab.
+    for agent, (svc, _sess) in cur.items():
+        if svc not in live_services and agent not in seen:
+            bc.execute("DELETE FROM tether_konsole_bindings WHERE agent=?", (agent,))
+            print(f"unbound {agent} (konsole {svc} gone)", flush=True)
+    bc.commit()
+
+
+def _pending(c: sqlite3.Connection, agents: list[str]) -> list[sqlite3.Row]:
+    """Unread messages to konsole-bound agents that we have not typed yet.
+
+    Messages live in `tether_handles` (table_name='messages') where `owner` is the
+    recipient and `sender` is the author; reads are tracked in `tether_reads`.
+    """
+    if not agents:
+        return []
+    marks = ",".join("?" * len(agents))
+    return list(
+        c.execute(
+            f"""SELECT h.handle, h.owner AS to_agent, h.sender AS from_agent,
+                       COALESCE(d.typed, 0) AS already_typed
+                FROM tether_handles h
+                LEFT JOIN tether_konsole_delivered d ON d.handle = h.handle
+                LEFT JOIN tether_reads r ON r.handle = h.handle AND r.agent = h.owner
+                WHERE h.table_name = 'messages'
+                  AND h.owner IN ({marks})
+                  AND (d.handle IS NULL OR (d.terminal = 0 AND d.attempts < 60))
+                  AND r.handle IS NULL
+                  AND COALESCE(h.status, 'open') = 'open'
+                  AND h.created_at >= datetime('now', '-1 day')
+                ORDER BY h.created_at ASC
+                LIMIT 20""",
+            agents,
+        )
+    )
+
+
+def _deliver(c: sqlite3.Connection, msg: sqlite3.Row, b: sqlite3.Row) -> None:
+    """Type the notice and submit it — once.
+
+    Earlier revisions retried `submit_when_idle` every poll. Each retry re-sends
+    CR then LF, which typed phantom newlines into a live prompt. The fix is to
+    gate on prompt state BEFORE injecting anything, and to treat the outcome as
+    final either way: the notice is durable in SQLite and visible on screen, so a
+    missed submit costs the agent one turn of latency, never a lost message.
+    """
+    agent, handle = msg["to_agent"], msg["handle"]
+    service, session = b["service"], b["session"]
+
+    # A binding addresses a tab; it does not identify the process currently in
+    # that tab.  Re-read the foreground process and pin this delivery to its PID
+    # so an agent crash followed by a shell/restarted TUI receives no bytes.
+    live = next(
+        (
+            item for item in konsole_driver.list_sessions()
+            if item.get("service") == service and item.get("session") == session
+        ),
+        None,
+    )
+    if (
+        live is None
+        or live.get("ambiguous")
+        or konsole_driver.process_agent(live, _registry()) != agent
+    ):
+        return
+    target_pid = live.get("pid")
+
+    # Never inject into a running turn or over a human draft.
+    state = konsole_driver.prompt_state(service, session)
+    if state not in ("empty",):
+        return  # try again on a later pass; nothing typed, nothing disturbed
+
+    line = notice_line(
+        to_agent=agent,
+        from_agent=msg["from_agent"] or "unknown",
+        subject="",
+        handle=handle,
+    )
+    ok, injected_state = konsole_driver.inject_tether_notice(
+        service,
+        session,
+        line,
+        expected_agent=agent,
+        expected_pid=target_pid,
+    )
+    SUCCESS_STATES = {"empty", "draft", "resubmitted"}
+    if not ok or injected_state not in SUCCESS_STATES:
+        # Bytes may already be in the composer — the post-inject state check
+        # cannot tell "typed but not submitted" from "raced with a live turn".
+        # Retrying re-types the same notice (observed 2026-08-23: one test
+        # message injected ~40 times). Outcome is final either way, per this
+        # function's own contract: record a terminal failed attempt so the
+        # pending query never selects it again.
+        print(f"  send failed: {agent} {handle}", flush=True)
+        c.execute(
+            "INSERT OR REPLACE INTO tether_konsole_delivered"
+            "(handle, agent, result, typed, terminal, attempts, delivered_at)"
+            " VALUES (?,?,'failed',1,1,1,datetime('now'))",
+            (handle, agent),
+        )
+        c.commit()
+        return
+
+    c.execute(
+        "INSERT OR REPLACE INTO tether_konsole_delivered"
+        "(handle, agent, result, typed, terminal, attempts, delivered_at)"
+        " VALUES (?,?,'sent',1,1,1,datetime('now'))",
+        (handle, agent),
+    )
+    c.commit()
+    print(f"  {agent}: {handle} [sent]", flush=True)
+
+
+def _acked(handle: str) -> bool:
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM tether_reads WHERE handle=? LIMIT 1", (handle,)
+            ).fetchone()
+            return row is not None
+    except sqlite3.Error:
+        return False
+
+
+def _dashboard_deliver_alive(c: sqlite3.Connection) -> bool:
+    """True when a registered konsole deliver URL answers on this machine.
+
+    The Python dashboard owns push delivery via `/api/konsole/deliver`. When it is
+    up, this waker must not also poll-inject (double notices). When it is down,
+    we are the fallback — that was the whole reason this script exists.
+    """
+    import urllib.error
+    import urllib.request
+
+    rows = list(
+        c.execute(
+            "SELECT url FROM tether_ping_endpoints "
+            "WHERE enabled = 1 AND url LIKE '%/api/konsole/deliver%'"
+        )
+    )
+    if not rows:
+        return False
+    # Probe one unique origin; all agents share the same dashboard port.
+    seen: set[str] = set()
+    for row in rows:
+        url = row["url"] if isinstance(row, sqlite3.Row) else row[0]
+        # Strip query; GET the deliver path is 405/422 but proves the server is up.
+        base = url.split("?", 1)[0]
+        if base in seen:
+            continue
+        seen.add(base)
+        try:
+            req = urllib.request.Request(base, method="GET")
+            with urllib.request.urlopen(req, timeout=0.5) as resp:
+                resp.read(64)
+            return True
+        except urllib.error.HTTPError:
+            # 4xx/5xx still means the dashboard process is bound and routing.
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--once", action="store_true", help="single pass then exit")
+    args = ap.parse_args()
+
+    if not konsole_driver.available():
+        print("qdbus not available — cannot inject into konsole", file=sys.stderr)
+        return 1
+
+    c = _conn()
+    fresh = _ensure_schema(c)
+
+    # Backfill ONLY on a genuinely fresh ledger, and ONLY messages the poll loop
+    # would never retry: already-read, or older than the 1-day pending window.
+    # Blindly marking every historical row "delivered" (the old behaviour) swallowed
+    # live unread mail across a restart — exactly how h&l_messages_d7ebc2435ff9
+    # never typed into cursor after the 2026-08-07 waker bounce.
+    if fresh:
+        n = c.execute(
+            """INSERT OR IGNORE INTO tether_konsole_delivered
+               (handle, agent, result, typed, terminal, attempts)
+               SELECT h.handle, h.owner, 'backfill:pre-existing', 1, 1, 0
+               FROM tether_handles h
+               WHERE h.table_name = 'messages'
+                 AND (
+                   h.created_at < datetime('now', '-1 day')
+                   OR EXISTS (
+                     SELECT 1 FROM tether_reads r
+                     WHERE r.handle = h.handle AND r.agent = h.owner
+                   )
+                 )"""
+        ).rowcount
+        c.commit()
+        print(f"first run: backfilled {n} pre-existing message(s) "
+              f"(skipped recent unread)", flush=True)
+
+    # `_rebind` writes here every pass; without this DDL the loop dies on any DB
+    # that predates the table.
+    bc = sqlite3.connect(BINDINGS_DB, timeout=10.0)
+    bc.row_factory = sqlite3.Row
+    bc.execute(
+        "CREATE TABLE IF NOT EXISTS tether_konsole_bindings ("
+        " agent TEXT PRIMARY KEY,"
+        " service TEXT NOT NULL,"
+        " session TEXT NOT NULL,"
+        " bound_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    bc.commit()
+
+    print(f"tether-konsole-waker: watching {DB}", flush=True)
+
+    while True:
+        try:
+            # If the dashboard's /api/konsole/deliver is alive, it owns push
+            # delivery + retry. Stay idle so we don't double-type into tabs.
+            if _dashboard_deliver_alive(c):
+                if args.once:
+                    return 0
+                time.sleep(POLL_SECONDS)
+                continue
+            _rebind(c, bc)
+            binds = _bindings(bc)
+            live = set(konsole_driver.konsole_services())
+            # Skip bindings whose konsole is gone (stale rows from old sessions).
+            usable = {a: b for a, b in binds.items() if b["service"] in live}
+            for msg in _pending(c, list(usable)):
+                binding = usable.get(msg["to_agent"])
+                if binding is None:
+                    continue
+                _deliver(c, msg, binding)
+        except sqlite3.Error as e:
+            print(f"db error: {e}", file=sys.stderr, flush=True)
+        except Exception as e:  # never die on one bad iteration
+            import traceback
+            print(f"loop error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+
+        if args.once:
+            return 0
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
