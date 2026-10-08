@@ -233,7 +233,7 @@ From your phone, tablet, or any browser: send a tmail to the relay, it gets push
 - Local data never leaves the machine unless you configure a relay.
 - Relay sees ciphertext envelopes and routing metadata. Not plaintext.
 - Encryption and decryption happen on the client side only.
-- AGPL source — the transport and storage claims are auditable.
+- Apache-2.0 source — the transport and storage claims are auditable.
 
 The D-Bus injection path requires explicit opt-in (the Konsole security setting above). Tether does not enable it silently.
 
@@ -258,5 +258,5 @@ Full notes in [changelog/](changelog/).
 
 ## License
 
-- Source: AGPL v3
+- Source: Apache License 2.0
 - Hosted relay service terms: separate from source distribution

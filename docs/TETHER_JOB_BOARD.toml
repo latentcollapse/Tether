@@ -9,12 +9,12 @@
 # PRODUCT ARCHITECTURE REFERENCE
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# TetherLite   — Free, AGPL. SQLite local. No relay. No caps. The full local protocol.
+# TetherLite   — Free, Apache-2.0. SQLite local. No relay. No caps. The full local protocol.
 #                This is the hook. Nobody ever loses this.
 #
 # Tether Cloud — SaaS. Relay server, API keys, WebSocket push, cross-machine
 #                delivery, agent discovery, GUI dashboard. Coordination only —
-#                relay routes handles, never stores or sees content. AGPL relay source
+#                relay routes handles, never stores or sees content. Apache-2.0 relay source
 #                stays open — "relay-blind" is a trust claim that requires auditability.
 #
 # Same protocol, same handle format, same MCP tool names across both.
@@ -45,7 +45,7 @@
 # What the paywall is: cross-machine reach. Nothing else.
 # Local coordination (SQLite, unlimited agents, unlimited messages) is always free.
 #
-# Licensing: TetherLite = AGPL (relay too — open source is the trust anchor for "relay-blind").
+# Licensing: TetherLite = Apache-2.0 (relay too — open source is the trust anchor for "relay-blind").
 #            Tether Cloud = hosted service. Software is open. Convenience is not.
 #
 # The pitch: "Are you sick of pasting JSON blobs like I was?"
@@ -56,7 +56,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 2 — RELAY SERVER (Self-Hosted, AGPL)
+# PHASE 2 — RELAY SERVER (Self-Hosted, Apache-2.0)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
