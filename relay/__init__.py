@@ -1,1 +1,0 @@
-"""Tether relay server package."""

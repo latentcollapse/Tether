@@ -1,6 +1,0 @@
-{
-  "name": "Tether Dashboard",
-  "description": "Dense, dark, and highly functional diagnostic interface for the Tether agent message routing network.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

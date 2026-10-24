@@ -1,0 +1,20 @@
+# hygiene config. Every key is optional; the commented values are the defaults.
+
+# [root]
+# allow = []        # extra top-level names or globs
+
+# [names]
+# allow = []        # globs on relative paths that exempt them from the name rule
+
+# [artifacts]
+# models_dir = "models"
+# max_file_mb = 5
+
+# [research]
+# stale_days = 90
+
+# [git]
+# base = ""
+
+# [workspace]
+# root = false      # true for a non-git folder that holds many repos
