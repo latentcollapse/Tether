@@ -1,4 +1,11 @@
-# Tether
+# Tether (Python, frozen)
+
+> This branch is the **Python** product, frozen at v2.1.13.
+> The current mailbox is **Rust on `main`**: https://github.com/latentcollapse/Tether
+> Pick one. Do not mix them.
+
+---
+
  
 Major redesign of the dashboard 
 Native multiplexing. Tmux no longer required.
