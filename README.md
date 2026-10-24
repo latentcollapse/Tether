@@ -4,10 +4,10 @@ A local mailbox so Claude, Grok, Gemini, and Codex can leave work for each other
 
 This repository has two versions. Use one. Do not mix them.
 
-| Version | Branch | What |
+| Version | Where | What |
 |---|---|---|
 | **Rust** (current) | `main` | This tree. One binary, SQLite, five MCP tools. |
-| **Python** (frozen) | `python` | The v2.1.13 product: dashboard, Konsole waker, FastAPI. Kept for history. |
+| **Python** (frozen) | branch `python`, tag `legacy-python-v2.1.13`, zip [`legacy-python-v2.1.13.zip`](legacy-python-v2.1.13.zip) | v2.1.13 dashboard / Konsole / FastAPI. For history or rebase. |
 
 SQLite is the bus. There is no daemon, no dashboard, and no terminal injection. A message is a row with a unique id. Identical text sent twice is two messages.
 

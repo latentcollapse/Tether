@@ -1,7 +1,11 @@
 # hygiene config. Every key is optional; the commented values are the defaults.
 
-# [root]
-# allow = []        # extra top-level names or globs
+[root]
+allow = ["legacy-python-v2.1.13.zip"]
+
+[names]
+# Frozen product version, not a "v2" of this crate.
+allow = ["legacy-python-v2.1.13.zip"]
 
 # [names]
 # allow = []        # globs on relative paths that exempt them from the name rule
